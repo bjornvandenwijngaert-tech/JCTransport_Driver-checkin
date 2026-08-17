@@ -86,6 +86,10 @@
       <p id="driverName" class="font-semibold text-slate-800 text-lg">…</p>
     </div>
 
+    <!-- Photos still waiting to reach Google Drive. Filled by refreshPendingBanner;
+         emptied rather than hidden, since hidden overlays still take taps in WebView. -->
+    <div id="pendingBannerHost"></div>
+
     <p class="text-sm font-semibold text-slate-600 mb-3">Select your vehicle for today</p>
     <input id="vehicleSearch" type="text" placeholder="Search vehicles…"
       class="w-full border-2 border-slate-200 focus:border-blue-400 rounded-xl px-4 py-3 text-sm focus:outline-none mb-3"
@@ -421,7 +425,17 @@ window.addEventListener('DOMContentLoaded', function() {
 // ── Load data ─────────────────────────────────────────────────────────────────
 function loadData() {
   document.getElementById('loadingVehicles').textContent = 'Connecting…';
-  loadGdConfig(null); // load Google Drive config in background
+  // Once the Drive config is known, sweep the retry queue and push anything a
+  // previous session could not deliver. Both steps are silent no-ops when the
+  // queue is empty or Drive is still unusable.
+  loadGdConfig(function() {
+    pqPrune(function() {
+      refreshPendingBanner();
+      flushPendingPhotos(function(msg, uploaded) {
+        if (uploaded) console.log('[Queue] boot flush: ' + msg);
+      });
+    });
+  });
   var pending = 3;
   function done() {
     if (--pending === 0) {
@@ -660,6 +674,22 @@ function selectVehicle(id) {
 // ── Screen 1: checklist ───────────────────────────────────────────────────────
 function renderChecklist() {
   document.getElementById('checklistItems').innerHTML = CHECKLIST.items.map(function(item) {
+    // A mandatory photo lives outside the fail block so it shows whatever the answer is.
+    // Only one #item-photo-grid-<id> may exist per card, so the fail block drops its own.
+    var photoRequired = item.photoRequired === true && item.type !== 'picture_required';
+
+    var photoBlockHtml = photoRequired
+      ? '<div class="mt-3" id="req-photo-' + item.id + '">'
+        + '<button type="button" onclick="openItemCamera(\'' + item.id + '\')"'
+        + ' class="req-photo-btn flex items-center gap-2 text-sm font-semibold rounded-xl px-4 py-2.5 w-full justify-center transition-colors border-2"'
+        + ' style="color:#b45309;background:#fffbeb;border-color:#fcd34d;">'
+        + '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/></svg>'
+        + '<span id="req-photo-label-' + item.id + '">Photo required — tap to capture</span>'
+        + '</button>'
+        + '<div id="item-photo-grid-' + item.id + '" class="flex flex-wrap gap-2 mt-2"></div>'
+        + '</div>'
+      : '';
+
     var failExtrasHtml = '';
     if (item.type === 'pass_fail' || item.type === 'yes_no') {
       // Bodywork items get side selector buttons
@@ -675,22 +705,27 @@ function renderChecklist() {
           + '</div></div>'
         : '';
 
+      // Photo capture is omitted here when the item already carries a mandatory photo block above
+      var failPhotoHtml = photoRequired ? ''
+        : '<div class="flex items-center gap-2 mb-2">'
+          + '<button type="button" onclick="openItemCamera(\'' + item.id + '\')" class="flex items-center gap-1.5 text-xs font-medium text-red-600 bg-red-50 border border-red-200 hover:bg-red-100 rounded-lg px-3 py-1.5 transition-colors">'
+          + '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/></svg>'
+          + 'Add photo</button>'
+          + '</div>'
+          + '<div id="item-photo-grid-' + item.id + '" class="flex flex-wrap gap-2"></div>';
+
       failExtrasHtml = '<div id="fail-extras-' + item.id + '" class="hidden mt-3 pt-3 border-t border-red-100 space-y-2">'
         + bodworkSides
         + '<textarea placeholder="Describe the issue…" rows="2"'
         + ' class="w-full text-sm text-slate-600 bg-red-50 border border-red-200 focus:border-red-400 rounded-xl px-3 py-2 focus:outline-none resize-none placeholder:text-red-300"'
         + ' oninput="setNote(\'' + item.id + '\', this.value)"></textarea>'
-        + '<div class="flex items-center gap-2 mb-2">'
-        + '<button type="button" onclick="openItemCamera(\'' + item.id + '\')" class="flex items-center gap-1.5 text-xs font-medium text-red-600 bg-red-50 border border-red-200 hover:bg-red-100 rounded-lg px-3 py-1.5 transition-colors">'
-        + '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/></svg>'
-        + 'Add photo</button>'
-        + '</div>'
-        + '<div id="item-photo-grid-' + item.id + '" class="flex flex-wrap gap-2"></div>'
-        + '</div></div>';
+        + failPhotoHtml
+        + '</div>';
     }
     return '<div class="item-card bg-white border-2 border-slate-100 rounded-2xl p-4" id="card-' + item.id + '">'
       + '<p class="text-sm font-semibold text-slate-700 mb-3 leading-snug">' + item.label + '</p>'
       + renderItemInput(item)
+      + photoBlockHtml
       + failExtrasHtml
       + '</div>';
   }).join('');
@@ -719,6 +754,15 @@ function renderItemInput(item) {
       + ' class="w-full text-lg font-bold text-slate-700 bg-slate-50 border-2 border-slate-100 focus:border-blue-400 rounded-xl px-4 py-3 focus:outline-none"'
       + ' oninput="setResponse(\'' + item.id + '\', this.value)">';
   }
+  if (item.type === 'picture_required') {
+    return '<div>'
+      + '<button type="button" onclick="openItemCamera(\'' + item.id + '\')" class="flex items-center gap-2 text-sm font-semibold text-blue-600 bg-blue-50 border-2 border-blue-200 hover:bg-blue-100 rounded-xl px-4 py-3 w-full justify-center transition-colors">'
+      + '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/></svg>'
+      + '<span id="pic-btn-label-' + item.id + '">Take Photo</span>'
+      + '</button>'
+      + '<div id="item-photo-grid-' + item.id + '" class="flex flex-wrap gap-2 mt-2"></div>'
+      + '</div>';
+  }
   return '<textarea placeholder="Enter your notes…" rows="3"'
     + ' class="w-full text-sm text-slate-700 bg-slate-50 border-2 border-slate-100 focus:border-blue-400 rounded-xl px-4 py-3 focus:outline-none resize-none"'
     + ' oninput="setResponse(\'' + item.id + '\', this.value)"></textarea>';
@@ -732,24 +776,26 @@ function setResponse(id, value) {
   var item       = CHECKLIST.items.find(function(i) { return i.id === id; });
   var failExtras = document.getElementById('fail-extras-' + id);
 
+  // 'failed' tracks the raw answer so a Fail still turns the card red and opens the notes block.
+  // 'answered' goes through isItemComplete so a Pass stays unmarked until its mandatory photo exists.
   if (item.type === 'pass_fail') {
     var pb = document.getElementById('pass-' + id);
     var fb = document.getElementById('fail-' + id);
     if (pb) pb.classList.toggle('active', value === 'pass');
     if (fb) fb.classList.toggle('active', value === 'fail');
-    card.classList.toggle('answered', value === 'pass');
     card.classList.toggle('failed',   value === 'fail');
+    card.classList.toggle('answered', value === 'pass' && isItemComplete(item));
     if (failExtras) failExtras.classList.toggle('hidden', value !== 'fail');
   } else if (item.type === 'yes_no') {
     var yb = document.getElementById('yes-' + id);
     var nb = document.getElementById('no-'  + id);
     if (yb) yb.classList.toggle('active', value === 'yes');
     if (nb) nb.classList.toggle('active', value === 'no');
-    card.classList.toggle('answered', value === 'yes');
     card.classList.toggle('failed',   value === 'no');
+    card.classList.toggle('answered', value === 'yes' && isItemComplete(item));
     if (failExtras) failExtras.classList.toggle('hidden', value !== 'no');
   } else {
-    card.classList.toggle('answered', value.trim().length > 0);
+    card.classList.toggle('answered', value.trim().length > 0 && isItemComplete(item));
   }
   updateProgress();
 }
@@ -777,12 +823,48 @@ function toggleSide(itemId, side) {
   }
 }
 
+// Single source of truth for "is this item done?" — used by the progress bar and the card styling
+function isItemComplete(item) {
+  var r        = responses[item.id];
+  var hasPhoto = !!(r && r.itemPhotos && r.itemPhotos.length > 0);
+  if (item.photoRequired === true && !hasPhoto) return false;
+  if (item.type === 'picture_required')         return hasPhoto;
+  if (item.type === 'text')                     return true;
+  return !!(r && r.value !== undefined && r.value !== '');
+}
+
+// Repaints the mandatory-photo button and the card's answered state after a photo is added or removed
+function refreshPhotoRequiredState(itemId) {
+  var item = CHECKLIST && CHECKLIST.items.find(function(i) { return i.id === itemId; });
+  if (!item) return;
+  var count = (responses[itemId] && responses[itemId].itemPhotos) ? responses[itemId].itemPhotos.length : 0;
+
+  if (item.photoRequired === true && item.type !== 'picture_required') {
+    var btn = document.querySelector('#req-photo-' + itemId + ' .req-photo-btn');
+    var lbl = document.getElementById('req-photo-label-' + itemId);
+    if (lbl) lbl.textContent = count > 0
+      ? count + ' photo' + (count > 1 ? 's' : '') + ' taken — tap to add another'
+      : 'Photo required — tap to capture';
+    if (btn) {
+      btn.style.color       = count > 0 ? '#15803d' : '#b45309';
+      btn.style.background  = count > 0 ? '#f0fdf4' : '#fffbeb';
+      btn.style.borderColor = count > 0 ? '#86efac' : '#fcd34d';
+    }
+  } else if (item.type === 'picture_required') {
+    var picLbl = document.getElementById('pic-btn-label-' + itemId);
+    if (picLbl) picLbl.textContent = count > 0 ? count + ' photo' + (count > 1 ? 's' : '') + ' taken' : 'Take Photo';
+  }
+
+  var card = document.getElementById('card-' + itemId);
+  if (card) card.classList.toggle('answered', isItemComplete(item) && !card.classList.contains('failed'));
+  updateProgress();
+}
+
 function updateProgress() {
-  var required = CHECKLIST.items.filter(function(i) { return i.type !== 'text'; });
+  // Text items are optional unless they carry a mandatory photo
+  var required = CHECKLIST.items.filter(function(i) { return i.type !== 'text' || i.photoRequired === true; });
   var total    = required.length;
-  var answered = required.filter(function(i) {
-    return responses[i.id] && responses[i.id].value !== undefined && responses[i.id].value !== '';
-  }).length;
+  var answered = required.filter(isItemComplete).length;
   document.getElementById('progressLabel').textContent = answered + ' / ' + total + ' answered';
   document.getElementById('progressBar').value = total > 0 ? Math.round(answered / total * 100) : 0;
   document.getElementById('toPhotosBtn').disabled = (answered < total) || needsTripChoice();
@@ -910,19 +992,416 @@ function handleItemPhoto(id, input) {
   input.value = '';
 }
 
+// ── Pending photo queue ───────────────────────────────────────────────────────
+// Photos that Drive did not accept are held on the device and retried later,
+// rather than being dropped at save time. IndexedDB, not localStorage: a single
+// photo is 2-6 MB and localStorage tops out around 5-10 MB in total.
+var PQ_DB_NAME    = 'vehicle-checkin';
+var PQ_STORE      = 'pendingPhotos';
+var PQ_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;  // 14 days
+var PQ_MAX_BYTES  = 300 * 1024 * 1024;         // 300 MB
+var _pqDb         = null;
+var _pqUnavailable = false;
+
+function pqOpen(onDone, onFail) {
+  if (_pqUnavailable) { if (onFail) onFail('IndexedDB unavailable'); return; }
+  if (_pqDb) { onDone(_pqDb); return; }
+  try {
+    if (!window.indexedDB) { _pqUnavailable = true; if (onFail) onFail('No IndexedDB'); return; }
+    var req = window.indexedDB.open(PQ_DB_NAME, 1);
+    req.onupgradeneeded = function() {
+      var db = req.result;
+      if (!db.objectStoreNames.contains(PQ_STORE)) {
+        db.createObjectStore(PQ_STORE, { keyPath: 'key', autoIncrement: true });
+      }
+    };
+    req.onsuccess = function() { _pqDb = req.result; onDone(_pqDb); };
+    req.onerror   = function() {
+      // Private browsing and some WebView configurations refuse to open a
+      // database. Fall back to today's behaviour rather than breaking submit.
+      _pqUnavailable = true;
+      console.warn('[Queue] IndexedDB unavailable:', req.error);
+      if (onFail) onFail(req.error);
+    };
+  } catch (e) {
+    _pqUnavailable = true;
+    console.warn('[Queue] IndexedDB threw on open:', e);
+    if (onFail) onFail(e);
+  }
+}
+
+function pqTx(mode, onStore, onFail) {
+  pqOpen(function(db) {
+    try {
+      var tx = db.transaction(PQ_STORE, mode);
+      onStore(tx.objectStore(PQ_STORE), tx);
+    } catch (e) {
+      console.warn('[Queue] transaction failed:', e);
+      if (onFail) onFail(e);
+    }
+  }, onFail);
+}
+
+function pqAdd(entry, onDone) {
+  pqTx('readwrite', function(store) {
+    var req = store.add(entry);
+    req.onsuccess = function() { if (onDone) onDone(req.result); };
+    req.onerror   = function() {
+      console.warn('[Queue] could not store photo:', req.error);
+      if (onDone) onDone(null);
+    };
+  }, function() { if (onDone) onDone(null); });
+}
+
+function pqAll(onDone) {
+  pqTx('readonly', function(store) {
+    var req = store.getAll();
+    req.onsuccess = function() { onDone(req.result || []); };
+    req.onerror   = function() { onDone([]); };
+  }, function() { onDone([]); });
+}
+
+function pqDelete(key, onDone) {
+  pqTx('readwrite', function(store) {
+    var req = store.delete(key);
+    req.onsuccess = function() { if (onDone) onDone(true); };
+    req.onerror   = function() { if (onDone) onDone(false); };
+  }, function() { if (onDone) onDone(false); });
+}
+
+function pqUpdate(entry, onDone) {
+  pqTx('readwrite', function(store) {
+    var req = store.put(entry);
+    req.onsuccess = function() { if (onDone) onDone(true); };
+    req.onerror   = function() { if (onDone) onDone(false); };
+  }, function() { if (onDone) onDone(false); });
+}
+
+function pqCount(onDone) {
+  pqAll(function(list) { onDone(list.length); });
+}
+
+// Age and size sweep. Anything dropped is named in the console — a queue that
+// silently discards photos is the exact failure this queue exists to remove.
+function pqPrune(onDone) {
+  pqAll(function(list) {
+    if (!list.length) { if (onDone) onDone(0); return; }
+    var now     = Date.now();
+    var doomed  = [];
+    var keepers = [];
+    list.forEach(function(e) {
+      if (now - (e.queuedAt || 0) > PQ_MAX_AGE_MS) doomed.push({ e: e, why: 'older than 14 days' });
+      else keepers.push(e);
+    });
+    // Oldest first until the total fits the size cap
+    keepers.sort(function(a, b) { return (a.queuedAt || 0) - (b.queuedAt || 0); });
+    var total = keepers.reduce(function(s, e) { return s + ((e.blob && e.blob.size) || 0); }, 0);
+    while (total > PQ_MAX_BYTES && keepers.length) {
+      var oldest = keepers.shift();
+      total -= (oldest.blob && oldest.blob.size) || 0;
+      doomed.push({ e: oldest, why: 'queue over 300 MB' });
+    }
+    if (!doomed.length) { if (onDone) onDone(0); return; }
+    doomed.forEach(function(d) {
+      console.warn('[Queue] dropped ' + d.e.fileName + ' from ' + (d.e.submissionId || 'unknown submission')
+        + ' — ' + d.why);
+    });
+    var remaining = doomed.length;
+    doomed.forEach(function(d) {
+      pqDelete(d.e.key, function() { if (--remaining === 0 && onDone) onDone(doomed.length); });
+    });
+  });
+}
+
+// Photos gathered during a submit that Drive did not take. They are written to
+// IndexedDB only after the record saves, because each entry needs the AddInData
+// id so a later retry can patch the record with the new Drive file ids.
+var _toQueue = [];
+
+function queueLater(kind, dataUrl, fileName, itemId, photoIdx) {
+  if (!dataUrl) return;
+  _toQueue.push({ kind: kind, dataUrl: dataUrl, fileName: fileName, itemId: itemId || null, photoIdx: photoIdx });
+}
+
+function pqFlushToStore(rec, addInDataId, issueIdsByItem, onDone) {
+  if (!_toQueue.length) { if (onDone) onDone(0); return; }
+  var batch = _toQueue;
+  _toQueue = [];
+  var dateStr     = rec.submittedAt.slice(0, 10);
+  var vehicleName = gdFolderName(rec.deviceName);
+  var remaining   = batch.length;
+  var stored      = 0;
+
+  batch.forEach(function(p) {
+    var blob;
+    try { blob = dataUrlToBlob(p.dataUrl); }
+    catch (e) {
+      console.warn('[Queue] could not convert ' + p.fileName + ':', e);
+      if (--remaining === 0 && onDone) onDone(stored);
+      return;
+    }
+    pqAdd({
+      submissionId:     rec.id,
+      addInDataId:      addInDataId || null,
+      issueAddInDataId: (p.itemId && issueIdsByItem) ? (issueIdsByItem[p.itemId] || null) : null,
+      kind:             p.kind,
+      itemId:           p.itemId,
+      photoIdx:         p.photoIdx,
+      fileName:         p.fileName,
+      blob:             blob,
+      dateStr:          dateStr,
+      vehicleName:      vehicleName,
+      queuedAt:         Date.now(),
+      attempts:         0,
+      lastError:        ''
+    }, function(key) {
+      if (key !== null) stored++;
+      if (--remaining === 0 && onDone) onDone(stored);
+    });
+  });
+}
+
+// ── Pending banner ────────────────────────────────────────────────────────────
+// Inline styles only — Drive's WebView overrides classes.
+function pqBannerHtml(count, note) {
+  return '<div style="margin-bottom:14px;padding:12px;border-radius:12px;'
+    + 'background:#FFFBEB;border:1px solid #FDE68A">'
+    + '<div style="font-size:13px;font-weight:600;color:#92400E">'
+    + count + ' photo' + (count === 1 ? '' : 's') + ' waiting to upload</div>'
+    + '<div id="pendingBannerNote" style="font-size:11px;color:#78350F;margin-top:2px">'
+    + (note || 'Saved on this device. They will upload on their own once Google Drive is reachable.')
+    + '</div>'
+    + '<button type="button" onclick="retryPendingPhotos(this)" style="margin-top:8px;padding:7px 14px;'
+    + 'border:none;border-radius:8px;background:#0047BB;color:#FFFFFF;font-size:13px;font-weight:600">'
+    + 'Retry now</button>'
+    + '</div>';
+}
+
+// The count is read asynchronously, so a later call must always win — otherwise
+// a slow earlier read can repaint a stale count over a fresh one.
+var _pqBannerSeq = 0;
+
+function refreshPendingBanner(note) {
+  var host = document.getElementById('pendingBannerHost');
+  if (!host) return;
+  var seq = ++_pqBannerSeq;
+  pqCount(function(n) {
+    if (seq !== _pqBannerSeq) return;
+    host.innerHTML = n > 0 ? pqBannerHtml(n, note) : '';
+  });
+}
+
+function retryPendingPhotos(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Uploading…'; }
+  flushPendingPhotos(function(msg) {
+    console.log('[Queue] ' + msg);
+    refreshPendingBanner(msg);
+  });
+}
+
+// ── Draining the queue ────────────────────────────────────────────────────────
+var _pqFlushing = false;
+
+// Push everything held on the device up to Drive, then patch the MyGeotab
+// records so the dashboard shows the photos. Safe to call at any time: it does
+// nothing when Drive is unusable, and it never runs twice at once.
+function flushPendingPhotos(onDone) {
+  function finish(msg, uploaded) {
+    _pqFlushing = false;
+    refreshPendingBanner();
+    if (onDone) onDone(msg, uploaded || 0);
+  }
+  if (_pqFlushing) { if (onDone) onDone('Already uploading…', 0); return; }
+  if (GD_STATUS !== 'ok') { if (onDone) onDone(gdReason(), 0); return; }
+  _pqFlushing = true;
+
+  pqAll(function(list) {
+    if (!list.length) { finish('Nothing to upload', 0); return; }
+
+    // One token for the whole pass. A failed refresh is a pass-level problem —
+    // burning an attempt counter per photo over it would age the queue out.
+    gdRefreshToken(function(accessToken) {
+      var groups = {};
+      list.forEach(function(e) {
+        if (!groups[e.submissionId]) groups[e.submissionId] = [];
+        groups[e.submissionId].push(e);
+      });
+      var ids      = Object.keys(groups);
+      var gi       = 0;
+      var uploaded = 0;
+      var failed   = 0;
+
+      function nextGroup() {
+        if (gi >= ids.length) {
+          var msg = failed
+            ? uploaded + ' uploaded, ' + failed + ' still waiting'
+            : uploaded + ' photo' + (uploaded === 1 ? '' : 's') + ' uploaded';
+          finish(msg, uploaded);
+          return;
+        }
+        var entries = groups[ids[gi++]];
+        var first   = entries[0];
+
+        // Searching is correct here, unlike at submit time: these folders are
+        // minutes or days old, so Drive has indexed them.
+        gdGetOrCreateFolder(accessToken, 'Vehicle Check-In', null, function(rootId) {
+          gdGetOrCreateFolder(accessToken, first.dateStr, rootId, function(dateId) {
+            gdGetOrCreateFolder(accessToken, first.vehicleName, dateId, function(vehicleId) {
+              gdGetOrCreateFolder(accessToken, first.submissionId, vehicleId, function(subId) {
+                uploadGroup(entries, subId);
+              }, groupFailed);
+            }, groupFailed);
+          }, groupFailed);
+        }, groupFailed);
+
+        function groupFailed(err) {
+          failed += entries.length;
+          var remaining = entries.length;
+          entries.forEach(function(e) {
+            e.attempts  = (e.attempts || 0) + 1;
+            e.lastError = String(err);
+            pqUpdate(e, function() { if (--remaining === 0) nextGroup(); });
+          });
+        }
+
+        function uploadGroup(entries, subId) {
+          var itemFolderId = null;
+          var newWalkaround = [];
+          var newItemIds    = {};   // itemId → [fileId]
+          var i = 0;
+
+          function step() {
+            if (i >= entries.length) { patchRecords(entries, newWalkaround, newItemIds, nextGroup); return; }
+            var e = entries[i];
+            // The item-photos subfolder is only created if something needs it.
+            if (e.kind === 'item' && !itemFolderId) {
+              gdGetOrCreateFolder(accessToken, 'item-photos', subId, function(fid) {
+                itemFolderId = fid; send(e, fid);
+              }, function(err) { markFailed(e, err); });
+              return;
+            }
+            send(e, e.kind === 'item' ? itemFolderId : subId);
+          }
+
+          function send(e, folderId) {
+            gdUploadBlob(accessToken, e.blob, e.fileName, folderId, function(fileId) {
+              uploaded++;
+              if (e.kind === 'item' && e.itemId) {
+                if (!newItemIds[e.itemId]) newItemIds[e.itemId] = [];
+                newItemIds[e.itemId].push(fileId);
+              } else {
+                newWalkaround.push(fileId);
+              }
+              pqDelete(e.key, function() { i++; step(); });
+            }, function(err) { markFailed(e, err); });
+          }
+
+          function markFailed(e, err) {
+            failed++;
+            e.attempts  = (e.attempts || 0) + 1;
+            e.lastError = String(err);
+            console.warn('[Queue] retry failed for ' + e.fileName + ':', err);
+            pqUpdate(e, function() { i++; step(); });
+          }
+
+          step();
+        }
+      }
+      nextGroup();
+    }, function(err) {
+      console.warn('[Queue] token refresh failed, keeping queue:', err);
+      finish('Google Drive sign-in expired — reconnect in the Checklist Builder', 0);
+    });
+  });
+}
+
+// Merge the new Drive file ids into the saved records. Without this the photos
+// sit in Drive but the dashboard still shows the submission as photo-less.
+function pqPatchRecord(addInDataId, mutate, onDone) {
+  if (!addInDataId) { onDone(); return; }
+  apiCall('Get', { typeName: 'AddInData', search: { id: addInDataId } }, function(results) {
+    var rec = results && results[0];
+    if (!rec || !rec.details) { onDone(); return; }
+    if (!mutate(rec.details)) { onDone(); return; }  // nothing changed
+    apiCall('Set', { typeName: 'AddInData', entity: rec }, function() { onDone(); },
+      function(err) { console.warn('[Queue] could not patch record ' + addInDataId + ':', err); onDone(); });
+  }, function(err) {
+    console.warn('[Queue] could not read record ' + addInDataId + ':', err);
+    onDone();
+  });
+}
+
+function pqMergeIds(target, key, ids) {
+  if (!ids || !ids.length) return false;
+  if (!target[key]) target[key] = [];
+  ids.forEach(function(id) { if (target[key].indexOf(id) === -1) target[key].push(id); });
+  return true;
+}
+
+function patchRecords(entries, newWalkaround, newItemIds, onDone) {
+  var responseId = null;
+  var issueIds   = {};   // itemId → issue AddInData id
+  entries.forEach(function(e) {
+    if (e.addInDataId) responseId = e.addInDataId;
+    if (e.itemId && e.issueAddInDataId) issueIds[e.itemId] = e.issueAddInDataId;
+  });
+
+  pqPatchRecord(responseId, function(details) {
+    var changed = pqMergeIds(details, 'gdFileIds', newWalkaround);
+    (details.items || []).forEach(function(item) {
+      if (pqMergeIds(item, 'gdItemPhotoIds', newItemIds[item.id])) changed = true;
+    });
+    return changed;
+  }, function() {
+    var itemIds   = Object.keys(issueIds).filter(function(id) { return newItemIds[id]; });
+    var remaining = itemIds.length;
+    if (!remaining) { onDone(); return; }
+    itemIds.forEach(function(itemId) {
+      pqPatchRecord(issueIds[itemId], function(details) {
+        return pqMergeIds(details, 'gdItemPhotoIds', newItemIds[itemId]);
+      }, function() { if (--remaining === 0) onDone(); });
+    });
+  });
+}
+
 // ── Google Drive ──────────────────────────────────────────────────────────────
+// Why GD_CONFIG is or is not usable. The failure modes look identical to the
+// driver otherwise, and only one of them is a bug.
+var GD_STATUS  = 'unknown';
+var _gdRetried = false;
+
+function gdReason() {
+  switch (GD_STATUS) {
+    case 'no-config':    return 'Google Drive is not connected in this database — connect it in the Checklist Builder';
+    case 'no-token':     return 'Google Drive connection is incomplete (no refresh token) — reconnect it in the Checklist Builder';
+    case 'query-failed': return 'could not read the Google Drive settings from MyGeotab';
+    default:             return 'Google Drive not available';
+  }
+}
+
 function loadGdConfig(onDone) {
-  rpc('Get', { typeName: 'AddInData', search: { addInId: ADDIN_ID } }, function(results) {
+  // Must go through apiCall, not rpc — inside the add-in SESSION carries only
+  // _driveApi, so rpc() would build a request against an undefined server and
+  // silently leave GD_CONFIG null, sending photos to base64 instead of Drive.
+  apiCall('Get', { typeName: 'AddInData', search: { addInId: ADDIN_ID } }, function(results) {
     var cfg = null;
-    for (var i = 0; i < results.length; i++) {
-      if (results[i].details && results[i].details.type === 'GoogleDriveConfig') {
-        cfg = results[i].details;
+    var list = results || [];
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].details && list[i].details.type === 'GoogleDriveConfig') {
+        cfg = list[i].details;
         break;
       }
     }
     GD_CONFIG = cfg;
+    GD_STATUS = !cfg ? 'no-config' : (cfg.refreshToken ? 'ok' : 'no-token');
+    console.log('[Google Drive] config: ' + GD_STATUS + ' (' + list.length + ' AddInData record(s) scanned)');
     if (onDone) onDone();
-  }, function() { if (onDone) onDone(); });
+  }, function(err) {
+    GD_CONFIG = null;
+    GD_STATUS = 'query-failed';
+    console.error('[Google Drive] settings query failed:', err);
+    if (onDone) onDone();
+  });
 }
 
 function gdRefreshToken(onSuccess, onError) {
@@ -953,7 +1432,12 @@ function gdRefreshToken(onSuccess, onError) {
 }
 
 function gdUploadPhoto(accessToken, dataUrl, fileName, folderId, onSuccess, onError) {
-  var blob = dataUrlToBlob(dataUrl);
+  gdUploadBlob(accessToken, dataUrlToBlob(dataUrl), fileName, folderId, onSuccess, onError);
+}
+
+// Split out from gdUploadPhoto so the retry queue, which holds Blobs rather
+// than data URLs, can reuse the same upload path.
+function gdUploadBlob(accessToken, blob, fileName, folderId, onSuccess, onError) {
   var metadata = JSON.stringify({ name: fileName, parents: [folderId] });
   var boundary = 'checkin_boundary_' + Date.now();
   var body = '--' + boundary + '\r\n'
@@ -982,14 +1466,43 @@ function gdUploadPhoto(accessToken, dataUrl, fileName, folderId, onSuccess, onEr
   .catch(function(err) { onError(err.message); });
 }
 
+// Vehicle names used to be stripped to ASCII because the name goes straight
+// into a Drive query string. That turned "Citroën C3" into "Citron C3" and
+// collapsed vehicles that differed only in punctuation. Escaping the query
+// (below) means the real name can be kept.
+function gdFolderName(name) {
+  var out = String(name == null ? '' : name)
+    .replace(/[\x00-\x1F\x7F]/g, ' ')  // control chars → space, so a stray
+                                       // newline separates words instead of
+                                       // welding them together
+    .replace(/[\/\\]/g, '-')           // slashes read as paths in Drive exports
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (out.length > 120) out = out.slice(0, 120).trim();
+  return out || 'Unnamed vehicle';
+}
+
+// Drive's q syntax takes backslash escapes inside a quoted string.
+function gdEscapeQuery(value) {
+  return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
 function gdGetOrCreateFolder(accessToken, name, parentId, onSuccess, onError) {
-  var query = 'mimeType="application/vnd.google-apps.folder" and name="' + name + '" and trashed=false'
-    + (parentId ? ' and "' + parentId + '" in parents' : '');
+  // Scope the top-level lookup to My Drive root, otherwise a folder of the same
+  // name that someone shared *to* this account can win the search.
+  var parentClause = parentId
+    ? ' and "' + gdEscapeQuery(parentId) + '" in parents'
+    : ' and "root" in parents';
+  var query = 'mimeType="application/vnd.google-apps.folder" and name="' + gdEscapeQuery(name) + '"'
+    + ' and trashed=false' + parentClause;
   fetch('https://www.googleapis.com/drive/v3/files?q=' + encodeURIComponent(query) + '&fields=files(id,name)', {
     headers: { 'Authorization': 'Bearer ' + accessToken }
   })
   .then(function(r) { return r.json(); })
   .then(function(data) {
+    // Without this the search error falls through to create, the create fails
+    // the same way, and onSuccess(undefined) sends uploads to a null parent.
+    if (data.error) { onError(data.error.message || JSON.stringify(data.error)); return; }
     if (data.files && data.files.length > 0) { onSuccess(data.files[0].id); return; }
     var meta = { name: name, mimeType: 'application/vnd.google-apps.folder' };
     if (parentId) meta.parents = [parentId];
@@ -999,56 +1512,95 @@ function gdGetOrCreateFolder(accessToken, name, parentId, onSuccess, onError) {
       body: JSON.stringify(meta)
     })
     .then(function(r) { return r.json(); })
-    .then(function(f) { onSuccess(f.id); })
+    .then(function(f) {
+      if (f.error) { onError(f.error.message || JSON.stringify(f.error)); return; }
+      if (!f.id)   { onError('Drive returned no folder id for "' + name + '"'); return; }
+      onSuccess(f.id);
+    })
     .catch(function(err) { onError(err.message); });
   })
   .catch(function(err) { onError(err.message); });
 }
 
-function uploadItemPhotosToGoogleDrive(rec, itemPhotoList, onDone) {
+// submissionFolderId comes from the walkaround upload. Reuse it rather than
+// searching for it: Drive's files.list index is eventually consistent, so a
+// folder created seconds ago often is not findable yet, and the search would
+// silently build a duplicate tree the photos then disappear into.
+function uploadItemPhotosToGoogleDrive(rec, itemPhotoList, submissionFolderId, onDone) {
   if (!itemPhotoList.length) { onDone(); return; }
-  if (!GD_CONFIG || !GD_CONFIG.refreshToken) { onDone(); return; }
+  if (!GD_CONFIG || !GD_CONFIG.refreshToken) { queueAllItems(); onDone(); return; }
+
+  function itemFileName(entry) {
+    return 'item_' + entry.itemId + '_photo' + (entry.idx + 1) + '.jpg';
+  }
+  function queueAllItems() {
+    itemPhotoList.forEach(function(entry) {
+      queueLater('item', entry.photo, itemFileName(entry), entry.itemId, entry.idx);
+    });
+  }
 
   gdRefreshToken(function(accessToken) {
-    var dateStr = rec.submittedAt.slice(0, 10);
-    var vehicleName = rec.deviceName.replace(/[^a-zA-Z0-9 \-·]/g, '').trim();
+    if (submissionFolderId) {
+      startUpload(accessToken, submissionFolderId);
+      return;
+    }
 
-    // Reuse same folder structure, add 'items' subfolder
+    // No walkaround photos, so the chain does not exist yet — build it
+    var dateStr     = rec.submittedAt.slice(0, 10);
+    var vehicleName = gdFolderName(rec.deviceName);
     gdGetOrCreateFolder(accessToken, 'Vehicle Check-In', null, function(rootId) {
       gdGetOrCreateFolder(accessToken, dateStr, rootId, function(dateId) {
         gdGetOrCreateFolder(accessToken, vehicleName, dateId, function(vehicleId) {
-          gdGetOrCreateFolder(accessToken, rec.id, vehicleId, function(submissionId) {
-            gdGetOrCreateFolder(accessToken, 'item-photos', submissionId, function(itemFolderId) {
-              var index = 0;
-              function uploadNext() {
-                if (index >= itemPhotoList.length) { onDone(); return; }
-                var entry = itemPhotoList[index];
-                var fileName = 'item_' + entry.itemId + '_photo' + (entry.idx + 1) + '.jpg';
-                gdUploadPhoto(accessToken, entry.photo, fileName, itemFolderId, function(fileId) {
-                  // Store Drive file ID back on the item
-                  var item = rec.items.find(function(i) { return i.id === entry.itemId; });
-                  if (item) {
-                    if (!item.gdItemPhotoIds) item.gdItemPhotoIds = [];
-                    item.gdItemPhotoIds.push(fileId);
-                  }
-                  index++; uploadNext();
-                }, function() { index++; uploadNext(); });
-              }
-              uploadNext();
-            }, function() { onDone(); });
-          }, function() { onDone(); });
-        }, function() { onDone(); });
-      }, function() { onDone(); });
-    }, function() { onDone(); });
-  }, function() { onDone(); });
+          gdGetOrCreateFolder(accessToken, rec.id, vehicleId, function(subId) {
+            startUpload(accessToken, subId);
+          }, function(err) { gdFail('Submission folder', err); queueAllItems(); onDone(); });
+        }, function(err) { gdFail('Vehicle folder', err); queueAllItems(); onDone(); });
+      }, function(err) { gdFail('Date folder', err); queueAllItems(); onDone(); });
+    }, function(err) { gdFail('Root folder', err); queueAllItems(); onDone(); });
+  }, function(err) { gdFail('Token refresh (item photos)', err); queueAllItems(); onDone(); });
+
+  function startUpload(accessToken, subId) {
+    gdGetOrCreateFolder(accessToken, 'item-photos', subId, function(itemFolderId) {
+      var index = 0;
+      function uploadNext() {
+        if (index >= itemPhotoList.length) { onDone(); return; }
+        var entry    = itemPhotoList[index];
+        var btn      = document.getElementById('submitBtn');
+        if (btn) btn.textContent = 'Uploading checklist photo ' + (index + 1) + ' of ' + itemPhotoList.length + '...';
+        var fileName = itemFileName(entry);
+        gdUploadPhoto(accessToken, entry.photo, fileName, itemFolderId, function(fileId) {
+          // Store Drive file ID back on the item
+          var item = rec.items.find(function(i) { return i.id === entry.itemId; });
+          if (item) {
+            if (!item.gdItemPhotoIds) item.gdItemPhotoIds = [];
+            item.gdItemPhotoIds.push(fileId);
+          }
+          index++; uploadNext();
+        }, function(err) {
+          gdFail('Checklist photo ' + (index + 1), err);
+          queueLater('item', entry.photo, fileName, entry.itemId, entry.idx);
+          index++; uploadNext();
+        });
+      }
+      uploadNext();
+    }, function(err) { gdFail('item-photos folder', err); queueAllItems(); onDone(); });
+  }
 }
 
 function uploadPhotosToGoogleDrive(rec, photoList, onDone) {
   if (!GD_CONFIG || !GD_CONFIG.refreshToken) { onDone([]); return; }
 
+  // A folder step failing means none of these photos reached Drive, so the
+  // whole batch goes to the queue rather than just the one being uploaded.
+  function queueAllWalkaround() {
+    photoList.forEach(function(p, i) {
+      queueLater('walkaround', p, 'photo_' + (i + 1) + '.jpg', null, i);
+    });
+  }
+
   gdRefreshToken(function(accessToken) {
     var dateStr = rec.submittedAt.slice(0, 10);
-    var vehicleName = rec.deviceName.replace(/[^a-zA-Z0-9 \-·]/g, '').trim();
+    var vehicleName = gdFolderName(rec.deviceName);
 
     // Create folder structure: Vehicle Check-In / date / vehicle / resp-id
     gdGetOrCreateFolder(accessToken, 'Vehicle Check-In', null, function(rootId) {
@@ -1059,7 +1611,9 @@ function uploadPhotosToGoogleDrive(rec, photoList, onDone) {
             var index = 0;
 
             function uploadNext() {
-              if (index >= photoList.length) { onDone(fileIds); return; }
+              // Hand the folder id out so item photos reuse it instead of
+              // re-searching for a folder Drive may not have indexed yet
+              if (index >= photoList.length) { onDone(fileIds, submissionId); return; }
               var btn = document.getElementById('submitBtn');
               btn.textContent = 'Uploading photo ' + (index + 1) + ' of ' + photoList.length + '...';
               var fileName = 'photo_' + (index + 1) + '.jpg';
@@ -1068,20 +1622,18 @@ function uploadPhotosToGoogleDrive(rec, photoList, onDone) {
                 index++;
                 uploadNext();
               }, function(err) {
-                console.error('Photo upload failed:', err);
+                gdFail('Walkaround photo ' + (index + 1), err);
+                queueLater('walkaround', photoList[index], fileName, null, index);
                 index++;
                 uploadNext();
               });
             }
             uploadNext();
-          }, function(err) { console.error('Folder error:', err); onDone([]); });
-        }, function(err) { console.error('Folder error:', err); onDone([]); });
-      }, function(err) { console.error('Folder error:', err); onDone([]); });
-    }, function(err) { console.error('Root folder error:', err); onDone([]); });
-  }, function(err) {
-    console.error('Token refresh failed:', err);
-    onDone([]);
-  });
+          }, function(err) { gdFail('Submission folder', err); queueAllWalkaround(); onDone([], null); });
+        }, function(err) { gdFail('Vehicle folder', err);      queueAllWalkaround(); onDone([], null); });
+      }, function(err) { gdFail('Date folder', err);           queueAllWalkaround(); onDone([], null); });
+    }, function(err) { gdFail('Root folder', err);             queueAllWalkaround(); onDone([], null); });
+  }, function(err) { gdFail('Token refresh', err);             queueAllWalkaround(); onDone([], null); });
 }
 
 // ── Submit ────────────────────────────────────────────────────────────────────
@@ -1122,6 +1674,7 @@ function submitChecklist() {
         id:         i.id,
         label:      i.label,
         type:       i.type,
+        photoRequired: i.photoRequired === true,
         value:      (responses[i.id] && responses[i.id].value != null) ? responses[i.id].value : '',
         note:       (responses[i.id] && responses[i.id].note)          ? responses[i.id].note  : '',
         sides:      (responses[i.id] && responses[i.id].sides)         ? responses[i.id].sides : [],
@@ -1147,27 +1700,58 @@ function submitChecklist() {
   // Convert slots object to ordered array for upload
   var photoArray = PHOTO_SLOTS.map(function(s) { return photos[s]; }).filter(Boolean);
 
+  // The config may have been connected in the Checklist Builder after this page
+  // loaded, so re-read it once before giving up on Drive.
+  if (!(GD_CONFIG && GD_CONFIG.refreshToken) && !_gdRetried) {
+    _gdRetried = true;
+    loadGdConfig(dispatchUpload);
+    return;
+  }
+  dispatchUpload();
+
+  function dispatchUpload() {
   if (GD_CONFIG && GD_CONFIG.refreshToken) {
     // Upload vehicle photos to Google Drive
-    uploadPhotosToGoogleDrive(responseRecord, photoArray, function(fileIds) {
+    uploadPhotosToGoogleDrive(responseRecord, photoArray, function(fileIds, submissionFolderId) {
       responseRecord.gdFileIds = fileIds;
-      // Upload item photos to Google Drive
-      uploadItemPhotosToGoogleDrive(responseRecord, itemPhotoList, function() {
+      // Upload item photos to Google Drive, reusing the folder just created
+      uploadItemPhotosToGoogleDrive(responseRecord, itemPhotoList, submissionFolderId, function() {
         // Clear base64 from record before saving to stay within AddInData limits
         responseRecord.items.forEach(function(item) { item.itemPhotos = []; });
         saveResponseRecord(responseRecord, btn);
       });
     });
   } else {
-    // Fall back to MediaFile for vehicle photos (photoArray)
+    // Drive is not usable right now. Walkaround photos still go to MediaFile so
+    // they are never at risk, but they are queued too so the Drive folder ends
+    // up complete. Checklist photos have no MediaFile path at all — the queue
+    // is the only thing standing between them and being discarded at save.
+    photoArray.forEach(function(p, i) {
+      queueLater('walkaround', p, 'photo_' + (i + 1) + '.jpg', null, i);
+    });
+    itemPhotoList.forEach(function(entry) {
+      queueLater('item', entry.photo, 'item_' + entry.itemId + '_photo' + (entry.idx + 1) + '.jpg',
+        entry.itemId, entry.idx);
+    });
     uploadPhotosSequentially(photoArray, responseRecord, 0, function() {
-      // Item photos stored as base64 in AddInData (best effort)
       saveResponseRecord(responseRecord, btn);
     });
+  }
   }
 }
 
 var _photoErrors = [];
+
+// Every Google Drive failure path routes through here. Previously they were
+// silent onDone() calls, which is why item photos could go missing with no
+// error anywhere — the submission looked successful.
+function gdFail(what, err) {
+  var detail = !err ? 'unknown error'
+    : (err.message ? err.message
+    : (typeof err === 'string' ? err : JSON.stringify(err)));
+  _photoErrors.push(what + ' failed: ' + detail);
+  console.error('[Google Drive] ' + what + ' failed:', err);
+}
 
 function uploadPhotosSequentially(photoList, rec, index, onDone) {
   if (index >= photoList.length) { onDone(); return; }
@@ -1230,6 +1814,25 @@ function uploadPhotosSequentially(photoList, rec, index, onDone) {
 
 function saveResponseRecord(rec, btn) {
   btn.textContent = 'Saving...';
+
+  // Backstop: base64 photos must never reach AddInData — Details is capped at
+  // 10,000 characters and a single photo is megabytes. Normally the Drive upload
+  // has already cleared these; this only fires if Drive was unreachable, so the
+  // check-in is still recorded rather than lost outright.
+  var strippedPhotos = 0;
+  (rec.items || []).forEach(function(item) {
+    if (item.itemPhotos && item.itemPhotos.length) {
+      strippedPhotos += item.itemPhotos.length;
+      item.itemPhotos = [];
+    }
+  });
+  if (strippedPhotos > 0) {
+    // Not lost — the submit path queued these before calling us. Say so, since
+    // the success screen would otherwise read as a plain failure.
+    gdFail(strippedPhotos + ' checklist photo(s) not uploaded yet',
+      gdReason() + '. They are saved on this device and will upload automatically.');
+  }
+
   apiCall('Add', {
     typeName: 'AddInData',
     entity: { addInId: ADDIN_ID, details: rec }
@@ -1255,12 +1858,41 @@ function saveResponseRecord(rec, btn) {
     if (checklistTotal > 0) {
       photoHtml += photoRow('Checklist photos', checklistSaved, checklistTotal);
     }
+    // Show what went wrong rather than reporting a clean success over missing
+    // photos. _photoErrors was collected but never rendered before this.
+    if (_photoErrors.length) {
+      photoHtml += '<div style="margin-top:8px;padding:8px;border-radius:6px;background:#FEF2F2;border:1px solid #FECACA">'
+        + '<div style="font-size:12px;font-weight:600;color:#B91C1C">Some photos were not uploaded</div>'
+        + _photoErrors.map(function(e) {
+            return '<div style="font-size:11px;color:#7F1D1D;margin-top:2px">'
+              + String(e).replace(/</g, '&lt;') + '</div>';
+          }).join('')
+        + '</div>';
+    }
     document.getElementById('successPhotoRows').innerHTML = photoHtml;
     TODAY_SUBMISSIONS[rec.deviceId] = true; // badge shows if driver goes back
     showScreen('success');
 
-    // Auto-create IssueStatus records for each failed item
+    // Auto-create IssueStatus records for each failed item. Their AddInData ids
+    // are kept so a later photo retry can patch them the same way it patches
+    // the response record — an issue with no photo is the one people open.
+    var issueIdsByItem = {};
     var failedItems = rec.items.filter(function(i) { return i.value === 'fail' || i.value === 'no'; });
+    var issuesLeft  = failedItems.length;
+    function issuesDone() {
+      if (issuesLeft > 0) return;
+      // Only now are all the ids known, so the queue entries can point at both
+      // the response record and the issue record they belong to.
+      pqFlushToStore(rec, id, issueIdsByItem, function(stored) {
+        if (stored) console.log('[Queue] ' + stored + ' photo(s) held for retry');
+        refreshPendingBanner();
+        // A one-off upload failure often clears on the next try, so attempt the
+        // queue immediately. It exits at once if Drive is still unusable.
+        if (stored) flushPendingPhotos(function(msg) { console.log('[Queue] post-submit: ' + msg); });
+      });
+    }
+    function issueSettled() { issuesLeft--; issuesDone(); }
+    issuesDone();
     failedItems.forEach(function(item) {
       var issueRecord = {
         type:          'IssueStatus',
@@ -1280,7 +1912,8 @@ function saveResponseRecord(rec, btn) {
         comments:      []
       };
       apiCall('Add', { typeName: 'AddInData', entity: { addInId: ADDIN_ID, details: issueRecord } },
-        function() {}, function() {}); // silent — don't block the success screen
+        function(issueId) { issueIdsByItem[item.id] = issueId; issueSettled(); },
+        function() { issueSettled(); }); // silent — don't block the success screen
     });
   }, function(err) {
     btn.disabled = false;
@@ -1386,11 +2019,13 @@ function removeItemPhoto(itemId, index) {
   if (responses[itemId] && responses[itemId].itemPhotos) {
     responses[itemId].itemPhotos.splice(index, 1);
     renderItemPhotoGrid(itemId);
+    refreshPhotoRequiredState(itemId);
   }
 }
 
 function openItemCamera(itemId) {
   _cameraItemId = itemId;
+  _currentSlot  = null;   // otherwise closeCamera() returns to the walkaround photos screen
   document.getElementById('cameraOverlay').style.display = 'flex';
   startCameraStream();
 }
@@ -1478,6 +2113,8 @@ function capturePhoto() {
       if (!responses[itemId].itemPhotos) responses[itemId].itemPhotos = [];
       responses[itemId].itemPhotos.push(compressed);
       renderItemPhotoGrid(itemId);
+      // Refresh button label, card state and progress for picture_required and photoRequired items
+      refreshPhotoRequiredState(itemId);
     } else if (slot) {
       // Directional vehicle photo
       photos[slot] = compressed;

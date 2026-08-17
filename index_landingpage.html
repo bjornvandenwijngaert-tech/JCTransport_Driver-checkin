@@ -22,11 +22,13 @@
   input, textarea, select { font-size: 16px !important; }
   /* Push headers below the Drive app's native overlay bar */
   header { padding-top: max(1rem, env(safe-area-inset-top)) !important; }
+  /* Upload progress screen spinner */
+  @keyframes ckSpin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body class="min-h-screen">
 
-<div style="position:fixed;bottom:0.5rem;left:0.5rem;color:#94a3b8;font-size:0.65rem;z-index:999;">v20.0 ★</div>
+<div style="position:fixed;bottom:0.5rem;left:0.5rem;color:#94a3b8;font-size:0.65rem;z-index:999;">v20.1 ★</div>
 
 <!-- iOS floating back button — visible when past vehicle select screen -->
 <button id="ios-back-btn" onclick="iosGoBack()"
@@ -227,7 +229,32 @@
   </div>
 </div>
 
-<!-- ═══ SCREEN 3: Success ══════════════════════════════════════════════════════ -->
+<!-- ═══ SCREEN 3: Uploading ════════════════════════════════════════════════════ -->
+<!-- Submit lands here immediately, whichever button was tapped. Every photo
+     counter writes to this screen, so progress no longer depends on the driver
+     having opened the photos screen. -->
+<div id="screen-uploading" class="screen"
+     style="display:none;min-height:100dvh;flex-direction:column;align-items:center;justify-content:center;background:#ffffff;padding:32px;text-align:center;">
+  <div id="upSpinner" style="width:56px;height:56px;border-radius:50%;border:4px solid #dbeafe;border-top-color:#2563eb;animation:ckSpin 0.9s linear infinite;margin-bottom:24px;"></div>
+  <h1 id="upTitle" style="font-size:20px;font-weight:700;color:#1e293b;margin:0 0 6px 0;">Submitting check-in</h1>
+  <p style="font-size:13px;color:#94a3b8;margin:0 0 24px 0;">Keep this screen open until it finishes.</p>
+  <div style="width:100%;max-width:320px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px;padding:16px;text-align:left;">
+    <div id="upRowWalk" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+      <span style="font-size:13px;color:#64748b;">Walkaround photos</span>
+      <span id="upWalkText" style="font-size:13px;font-weight:600;color:#1e293b;">0/0</span>
+    </div>
+    <div id="upRowItem" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+      <span style="font-size:13px;color:#64748b;">Checklist photos</span>
+      <span id="upItemText" style="font-size:13px;font-weight:600;color:#1e293b;">0/0</span>
+    </div>
+    <div style="height:6px;background:#e2e8f0;border-radius:999px;overflow:hidden;margin-top:4px;">
+      <div id="upBar" style="height:100%;width:0%;background:#2563eb;border-radius:999px;transition:width .25s ease;"></div>
+    </div>
+    <p id="upStage" style="font-size:12px;color:#94a3b8;margin:10px 0 0 0;">Preparing…</p>
+  </div>
+</div>
+
+<!-- ═══ SCREEN 4: Success ══════════════════════════════════════════════════════ -->
 <div id="screen-success" class="screen hidden min-h-screen flex flex-col items-center justify-center bg-white p-8 text-center">
   <div class="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mb-6">
     <svg class="w-10 h-10 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
@@ -1565,10 +1592,10 @@ function uploadItemPhotosToGoogleDrive(rec, itemPhotoList, submissionFolderId, o
       function uploadNext() {
         if (index >= itemPhotoList.length) { onDone(); return; }
         var entry    = itemPhotoList[index];
-        var btn      = document.getElementById('submitBtn');
-        if (btn) btn.textContent = 'Uploading checklist photo ' + (index + 1) + ' of ' + itemPhotoList.length + '...';
+        upStart('item', index);
         var fileName = itemFileName(entry);
         gdUploadPhoto(accessToken, entry.photo, fileName, itemFolderId, function(fileId) {
+          upOk('item');
           // Store Drive file ID back on the item
           var item = rec.items.find(function(i) { return i.id === entry.itemId; });
           if (item) {
@@ -1614,10 +1641,10 @@ function uploadPhotosToGoogleDrive(rec, photoList, onDone) {
               // Hand the folder id out so item photos reuse it instead of
               // re-searching for a folder Drive may not have indexed yet
               if (index >= photoList.length) { onDone(fileIds, submissionId); return; }
-              var btn = document.getElementById('submitBtn');
-              btn.textContent = 'Uploading photo ' + (index + 1) + ' of ' + photoList.length + '...';
+              upStart('walk', index);
               var fileName = 'photo_' + (index + 1) + '.jpg';
               gdUploadPhoto(accessToken, photoList[index], fileName, submissionId, function(fileId) {
+                upOk('walk');
                 fileIds.push(fileId);
                 index++;
                 uploadNext();
@@ -1636,6 +1663,60 @@ function uploadPhotosToGoogleDrive(rec, photoList, onDone) {
   }, function(err) { gdFail('Token refresh', err);             queueAllWalkaround(); onDone([], null); });
 }
 
+// ── Upload progress screen ────────────────────────────────────────────────────
+// Previously the only feedback was the text on #submitBtn. When photos are
+// optional the driver taps #toPhotosBtn instead and never opens that screen, so
+// nothing visibly happened and the submit looked dead. Progress now lives on its
+// own screen, which no button owns.
+var _up = { walk: { total: 0, cur: 0, ok: 0, done: false },
+            item: { total: 0, cur: 0, ok: 0, done: false } };
+
+function upSetText(id, txt) { var e = document.getElementById(id); if (e) e.textContent = txt; }
+
+function upGroupText(g) {
+  if (g.done) return g.ok + '/' + g.total + ' uploaded';
+  return g.cur + '/' + g.total + ' uploading';
+}
+
+function upRender(stage) {
+  upSetText('upWalkText', upGroupText(_up.walk));
+  upSetText('upItemText', upGroupText(_up.item));
+  var total = _up.walk.total + _up.item.total;
+  var done  = _up.walk.ok + _up.item.ok;
+  var bar = document.getElementById('upBar');
+  if (bar) bar.style.width = (total === 0 ? 100 : Math.round(done * 100 / total)) + '%';
+  if (stage) upSetText('upStage', stage);
+}
+
+function upBegin(walkTotal, itemTotal) {
+  _up = { walk: { total: walkTotal, cur: 0, ok: 0, done: walkTotal === 0 },
+          item: { total: itemTotal, cur: 0, ok: 0, done: itemTotal === 0 } };
+  var rw = document.getElementById('upRowWalk');
+  var ri = document.getElementById('upRowItem');
+  if (rw) rw.style.display = walkTotal > 0 ? 'flex' : 'none';
+  if (ri) ri.style.display = itemTotal > 0 ? 'flex' : 'none';
+  upSetText('upTitle', 'Submitting check-in');
+  var sp = document.getElementById('upSpinner');
+  if (sp) sp.style.display = 'block';
+  upRender((walkTotal + itemTotal) > 0 ? 'Preparing…' : 'Saving check-in…');
+  showScreen('uploading');
+}
+
+function upStart(kind, index) { _up[kind].cur = index + 1; upRender('Photo ' + (index + 1) + ' of ' + _up[kind].total); }
+function upOk(kind)           { _up[kind].ok++; upRender(); }
+function upFinishAll() {
+  _up.walk.done = true; _up.item.done = true;
+  upRender('Saving check-in…');
+}
+
+// Both buttons can start a submit, so both have to be locked for it.
+function setSubmitLocked(locked) {
+  ['submitBtn', 'toPhotosBtn'].forEach(function(id) {
+    var b = document.getElementById(id);
+    if (b) b.disabled = locked;
+  });
+}
+
 // ── Submit ────────────────────────────────────────────────────────────────────
 function submitChecklist() {
   var failedItems = CHECKLIST.items.filter(function(item) {
@@ -1644,8 +1725,7 @@ function submitChecklist() {
   });
 
   var vehicleLabel = selectedVehicle.name + (selectedVehicle.plate ? ' · ' + selectedVehicle.plate : '');
-  var btn = document.getElementById('submitBtn');
-  btn.disabled = true;
+  setSubmitLocked(true);
 
   document.getElementById('successChecklistName').textContent = CHECKLIST.name;
   document.getElementById('successVehicle').textContent = vehicleLabel;
@@ -1685,7 +1765,6 @@ function submitChecklist() {
   };
 
   _photoErrors = [];
-  btn.textContent = 'Uploading photos...';
 
   // Collect all item photos for upload
   var itemPhotoList = [];
@@ -1699,6 +1778,10 @@ function submitChecklist() {
 
   // Convert slots object to ordered array for upload
   var photoArray = PHOTO_SLOTS.map(function(s) { return photos[s]; }).filter(Boolean);
+
+  // Leave the form behind straight away — this is the driver's confirmation that
+  // the tap registered, and it removes any chance of a second submit.
+  upBegin(photoArray.length, itemPhotoList.length);
 
   // The config may have been connected in the Checklist Builder after this page
   // loaded, so re-read it once before giving up on Drive.
@@ -1718,7 +1801,7 @@ function submitChecklist() {
       uploadItemPhotosToGoogleDrive(responseRecord, itemPhotoList, submissionFolderId, function() {
         // Clear base64 from record before saving to stay within AddInData limits
         responseRecord.items.forEach(function(item) { item.itemPhotos = []; });
-        saveResponseRecord(responseRecord, btn);
+        saveResponseRecord(responseRecord);
       });
     });
   } else {
@@ -1734,7 +1817,7 @@ function submitChecklist() {
         entry.itemId, entry.idx);
     });
     uploadPhotosSequentially(photoArray, responseRecord, 0, function() {
-      saveResponseRecord(responseRecord, btn);
+      saveResponseRecord(responseRecord);
     });
   }
   }
@@ -1756,8 +1839,7 @@ function gdFail(what, err) {
 function uploadPhotosSequentially(photoList, rec, index, onDone) {
   if (index >= photoList.length) { onDone(); return; }
 
-  var btn = document.getElementById('submitBtn');
-  btn.textContent = 'Uploading photo ' + (index + 1) + ' of ' + photoList.length + '...';
+  upStart('walk', index);
 
   var dataUrl  = photoList[index];
   var blob     = dataUrlToBlob(dataUrl);
@@ -1789,7 +1871,7 @@ function uploadPhotosSequentially(photoList, rec, index, onDone) {
       .then(function(r) { return r.json(); })
       .then(function(data) {
         if (data.error) { _photoErrors.push('Upload error: ' + JSON.stringify(data.error)); }
-        else { rec.mediaFileIds.push(mediaFileId); }
+        else { rec.mediaFileIds.push(mediaFileId); upOk('walk'); }
         uploadPhotosSequentially(photoList, rec, index + 1, onDone);
       })
       .catch(function(err) {
@@ -1812,8 +1894,11 @@ function uploadPhotosSequentially(photoList, rec, index, onDone) {
   });
 }
 
-function saveResponseRecord(rec, btn) {
-  btn.textContent = 'Saving...';
+function saveResponseRecord(rec) {
+  // Every upload path funnels through here, including the ones that gave up at a
+  // folder step, so this is the one safe place to flip the counters to their
+  // final "N/N uploaded" reading.
+  upFinishAll();
 
   // Backstop: base64 photos must never reach AddInData — Details is capped at
   // 10,000 characters and a single photo is megabytes. Normally the Drive upload
@@ -1916,8 +2001,15 @@ function saveResponseRecord(rec, btn) {
         function() { issueSettled(); }); // silent — don't block the success screen
     });
   }, function(err) {
-    btn.disabled = false;
-    btn.textContent = 'Submit Checklist';
+    // Hand the driver back the form they came from rather than stranding them on
+    // a progress screen that will never finish.
+    setSubmitLocked(false);
+    var back = document.getElementById('submitBtn');
+    if (back) back.textContent = 'Submit Checklist';
+    var sp = document.getElementById('upSpinner');
+    if (sp) sp.style.display = 'none';
+    upSetText('upTitle', 'Could not save');
+    showScreen(CHECKLIST && CHECKLIST.requirePhotos ? 'photos' : 'checklist');
     var msg = (err && err.message) ? err.message : JSON.stringify(err);
     alert('Save failed: ' + msg + '\n\nPlease try again or check your connection.');
   });
@@ -2140,7 +2232,9 @@ function showScreen(name) {
   _currentScreen = name;
   // Show floating back button on all screens except vehicle select and success
   var btn = document.getElementById('ios-back-btn');
-  if (btn) { btn.style.display = (name !== 'select' && name !== 'success') ? 'flex' : 'none'; }
+  // 'uploading' is deliberately excluded — backing out mid-upload would leave the
+  // photos half-sent with no screen reporting it.
+  if (btn) { btn.style.display = (name !== 'select' && name !== 'success' && name !== 'uploading') ? 'flex' : 'none'; }
 }
 
 function iosGoBack() {

@@ -28,7 +28,7 @@
 </head>
 <body class="min-h-screen">
 
-<div style="position:fixed;bottom:0.5rem;left:0.5rem;color:#94a3b8;font-size:0.65rem;z-index:999;">v20.3 ★</div>
+<div style="position:fixed;bottom:0.5rem;left:0.5rem;color:#94a3b8;font-size:0.65rem;z-index:999;">v20.4 ★</div>
 
 <!-- iOS floating back button — visible when past vehicle select screen -->
 <button id="ios-back-btn" onclick="iosGoBack()"
@@ -1722,7 +1722,13 @@ function upBegin(walkTotal, itemTotal) {
   showScreen('uploading');
 }
 
-function upStart(kind, index) { _up[kind].cur = index + 1; upRender('Photo ' + (index + 1) + ' of ' + _up[kind].total); }
+function upStart(kind, index, destination) {
+  _up[kind].cur = index + 1;
+  var stage = destination
+    ? 'Storing photo ' + (index + 1) + ' of ' + _up[kind].total + ' in ' + destination + '…'
+    : 'Photo ' + (index + 1) + ' of ' + _up[kind].total;
+  upRender(stage);
+}
 function upOk(kind)           { _up[kind].ok++; upRender(); }
 function upFinishAll() {
   _up.walk.done = true; _up.item.done = true;
@@ -1758,6 +1764,7 @@ function submitChecklist() {
   var responseRecord = {
     type:          'ChecklistResponse',
     id:            submissionId,
+    clientBuild:   'v20.4',
     templateId:    CHECKLIST.id,
     templateName:  CHECKLIST.name,
     tripType:      (CHECKLIST.tripType && CHECKLIST.tripType !== 'any') ? CHECKLIST.tripType : (driverTripChoice || 'any'),
@@ -1832,7 +1839,7 @@ function submitChecklist() {
     uploadPhotosToMediaFileMode(responseRecord, walkaroundPhotos, itemPhotoList, function() {
       if (useDriveArchive() && GD_CONFIG && GD_CONFIG.refreshToken) {
         _driveArchivePass = true;
-        upRender('Archiving photos to Google Drive…');
+        upRender('Finalising secure photo storage…');
         uploadPhotosToGoogleDrive(responseRecord, photoArray, function(fileIds, submissionFolderId, indexedWalkaroundIds) {
           responseRecord.gdFileIds = fileIds;
           uploadItemPhotosToGoogleDrive(responseRecord, itemPhotoList, submissionFolderId, function(indexedItemIds) {
@@ -2152,8 +2159,8 @@ function uploadPhotosToMediaFileMode(rec, walkaroundPhotos, itemPhotoList, onDon
       }
 
       var entry = manifestEntries[i];
-      if (entry.kind === 'walkaround') upStart('walk', walkIndex);
-      else upStart('item', itemIndex);
+      if (entry.kind === 'walkaround') upStart('walk', walkIndex, 'MyGeotab');
+      else upStart('item', itemIndex, 'MyGeotab');
 
       uploadManifestEntryToMedia(session, rec.id, entry, function() {
         if (entry.state === 'ready') {

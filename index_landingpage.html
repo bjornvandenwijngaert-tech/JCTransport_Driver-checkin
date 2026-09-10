@@ -28,7 +28,7 @@
 </head>
 <body class="min-h-screen">
 
-<div style="position:fixed;bottom:0.5rem;left:0.5rem;color:#94a3b8;font-size:0.65rem;z-index:999;">v20.4 ★</div>
+<div style="position:fixed;bottom:0.5rem;left:0.5rem;color:#94a3b8;font-size:0.65rem;z-index:999;">v20.5 ★</div>
 
 <!-- iOS floating back button — visible when past vehicle select screen -->
 <button id="ios-back-btn" onclick="iosGoBack()"
@@ -1441,36 +1441,61 @@ function loadGdConfig(onDone) {
 
 function gdRefreshToken(onSuccess, onError) {
   if (!GD_CONFIG || !GD_CONFIG.refreshToken) { onError('No Google Drive config'); return; }
-  // Check if access token still valid (with 60s buffer)
-  if (GD_CONFIG.accessToken && GD_CONFIG.expiresAt && Date.now() < GD_CONFIG.expiresAt - 60000) {
-    onSuccess(GD_CONFIG.accessToken);
-    return;
-  }
   if (!SESSION || !SESSION.sessionId) { onError('No MyGeotab session'); return; }
-  // Deliberately text/plain: that keeps this a CORS-simple request. Apps Script does
-  // not answer preflight, so an application/json content type never reaches the broker.
-  fetch(GD_TOKEN_BROKER, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({
-      action:  'refresh',
-      session: {
-        server:    SESSION.server,
-        database:  SESSION.database,
-        userName:  SESSION.userName,
-        sessionId: SESSION.sessionId
-      },
-      refreshToken: GD_CONFIG.refreshToken
-    })
+  gdDriverBrokerFetch({
+    action:  'refresh',
+    session: {
+      server:    SESSION.server,
+      database:  SESSION.database,
+      userName:  SESSION.userName,
+      sessionId: SESSION.sessionId
+    },
+    refreshToken: GD_CONFIG.refreshToken
   })
-  .then(function(r) { return r.json(); })
   .then(function(data) {
     if (data.error) { onError(data.error_description || data.error); return; }
+    if (!data.access_token) { onError('Token service returned no access token'); return; }
     GD_CONFIG.accessToken = data.access_token;
     GD_CONFIG.expiresAt   = Date.now() + (data.expires_in * 1000);
     onSuccess(data.access_token);
   })
   .catch(function(err) { onError(err.message); });
+}
+
+function gdDriverBrokerFetch(body, attempt) {
+  attempt = attempt || 0;
+  // Apps Script can transiently return an HTML error page. Parse text explicitly
+  // and retry those temporary responses instead of surfacing a JSON syntax error.
+  return fetchWithTimeout(GD_TOKEN_BROKER + '?request=' + Date.now() + '-' + attempt, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    cache: 'no-store',
+    body: JSON.stringify(body)
+  }, 15000)
+  .then(function(response) {
+    return response.text().then(function(text) {
+      if (!response.ok) throw new Error('Token service HTTP ' + response.status);
+      try { return JSON.parse(text); }
+      catch (e) { throw new Error('Token service returned a temporary non-JSON response'); }
+    });
+  })
+  .catch(function(err) {
+    if (attempt >= 2) throw err;
+    return new Promise(function(resolve) {
+      setTimeout(resolve, 750 * (attempt + 1));
+    }).then(function() { return gdDriverBrokerFetch(body, attempt + 1); });
+  });
+}
+
+function gdInvalidateCachedAccessToken(err) {
+  var text = err && err.message ? err.message
+    : (typeof err === 'string' ? err : JSON.stringify(err || ''));
+  if (/\b401\b|invalid authentication credentials|invalid credentials|unauthenticated/i.test(text)) {
+    if (GD_CONFIG) {
+      GD_CONFIG.accessToken = null;
+      GD_CONFIG.expiresAt = 0;
+    }
+  }
 }
 
 function gdUploadPhoto(accessToken, dataUrl, fileName, folderId, onSuccess, onError) {
@@ -1764,7 +1789,7 @@ function submitChecklist() {
   var responseRecord = {
     type:          'ChecklistResponse',
     id:            submissionId,
-    clientBuild:   'v20.4',
+    clientBuild:   'v20.5',
     templateId:    CHECKLIST.id,
     templateName:  CHECKLIST.name,
     tripType:      (CHECKLIST.tripType && CHECKLIST.tripType !== 'any') ? CHECKLIST.tripType : (driverTripChoice || 'any'),
@@ -1903,6 +1928,7 @@ function gdFail(what, err) {
     : (err.message ? err.message
     : (typeof err === 'string' ? err : JSON.stringify(err)));
   var message = what + ' failed: ' + detail;
+  gdInvalidateCachedAccessToken(err);
   if (_driveArchivePass) _archiveErrors.push(message);
   else _photoErrors.push(message);
   console.error('[Google Drive] ' + what + ' failed:', err);

@@ -28,7 +28,7 @@
 </head>
 <body class="min-h-screen">
 
-<div style="position:fixed;bottom:0.5rem;left:0.5rem;color:#94a3b8;font-size:0.65rem;z-index:999;">v20.2 ★</div>
+<div style="position:fixed;bottom:0.5rem;left:0.5rem;color:#94a3b8;font-size:0.65rem;z-index:999;">v20.3 ★</div>
 
 <!-- iOS floating back button — visible when past vehicle select screen -->
 <button id="ios-back-btn" onclick="iosGoBack()"
@@ -283,7 +283,7 @@ var GD_CONFIG  = null; // loaded from AddInData on boot
 // holds the secret and only answers callers who prove they are signed into this
 // database. Source and deploy notes: ../../token-broker/
 var GD_TOKEN_BROKER = 'https://script.google.com/macros/s/AKfycbwFtJzkXWz5L1cxnIr5LVN_CYmniPYgq7dzNTN2-hENPXEskz7edVMtRkAb7GlbwAaZ/exec';
-var PHOTO_STORAGE_MODE = 'mediafile_demo'; // demo-only durability trial
+var PHOTO_STORAGE_MODE = 'mediafile_then_drive';
 var MEDIA_UPLOAD_TIMEOUT_MS = 30000;
 var MEDIA_READY_TIMEOUT_MS  = 30000;
 var MEDIA_READY_POLL_MS     = 1500;
@@ -1569,8 +1569,9 @@ function gdGetOrCreateFolder(accessToken, name, parentId, onSuccess, onError) {
 // folder created seconds ago often is not findable yet, and the search would
 // silently build a duplicate tree the photos then disappear into.
 function uploadItemPhotosToGoogleDrive(rec, itemPhotoList, submissionFolderId, onDone) {
-  if (!itemPhotoList.length) { onDone(); return; }
-  if (!GD_CONFIG || !GD_CONFIG.refreshToken) { queueAllItems(); onDone(); return; }
+  var indexedIds = {};
+  if (!itemPhotoList.length) { onDone(indexedIds); return; }
+  if (!GD_CONFIG || !GD_CONFIG.refreshToken) { queueAllItems(); onDone(indexedIds); return; }
 
   function itemFileName(entry) {
     return 'item_' + entry.itemId + '_photo' + (entry.idx + 1) + '.jpg';
@@ -1595,22 +1596,24 @@ function uploadItemPhotosToGoogleDrive(rec, itemPhotoList, submissionFolderId, o
         gdGetOrCreateFolder(accessToken, vehicleName, dateId, function(vehicleId) {
           gdGetOrCreateFolder(accessToken, rec.id, vehicleId, function(subId) {
             startUpload(accessToken, subId);
-          }, function(err) { gdFail('Submission folder', err); queueAllItems(); onDone(); });
-        }, function(err) { gdFail('Vehicle folder', err); queueAllItems(); onDone(); });
-      }, function(err) { gdFail('Date folder', err); queueAllItems(); onDone(); });
-    }, function(err) { gdFail('Root folder', err); queueAllItems(); onDone(); });
-  }, function(err) { gdFail('Token refresh (item photos)', err); queueAllItems(); onDone(); });
+          }, function(err) { gdFail('Submission folder', err); queueAllItems(); onDone(indexedIds); });
+        }, function(err) { gdFail('Vehicle folder', err); queueAllItems(); onDone(indexedIds); });
+      }, function(err) { gdFail('Date folder', err); queueAllItems(); onDone(indexedIds); });
+    }, function(err) { gdFail('Root folder', err); queueAllItems(); onDone(indexedIds); });
+  }, function(err) { gdFail('Token refresh (item photos)', err); queueAllItems(); onDone(indexedIds); });
 
   function startUpload(accessToken, subId) {
     gdGetOrCreateFolder(accessToken, 'item-photos', subId, function(itemFolderId) {
       var index = 0;
       function uploadNext() {
-        if (index >= itemPhotoList.length) { onDone(); return; }
+        if (index >= itemPhotoList.length) { onDone(indexedIds); return; }
         var entry    = itemPhotoList[index];
-        upStart('item', index);
+        if (!_driveArchivePass) upStart('item', index);
         var fileName = itemFileName(entry);
         gdUploadPhoto(accessToken, entry.photo, fileName, itemFolderId, function(fileId) {
-          upOk('item');
+          if (!_driveArchivePass) upOk('item');
+          if (!indexedIds[entry.itemId]) indexedIds[entry.itemId] = [];
+          indexedIds[entry.itemId][entry.idx] = fileId;
           // Store Drive file ID back on the item
           var item = rec.items.find(function(i) { return i.id === entry.itemId; });
           if (item) {
@@ -1625,7 +1628,7 @@ function uploadItemPhotosToGoogleDrive(rec, itemPhotoList, submissionFolderId, o
         });
       }
       uploadNext();
-    }, function(err) { gdFail('item-photos folder', err); queueAllItems(); onDone(); });
+    }, function(err) { gdFail('item-photos folder', err); queueAllItems(); onDone(indexedIds); });
   }
 }
 
@@ -1650,17 +1653,19 @@ function uploadPhotosToGoogleDrive(rec, photoList, onDone) {
         gdGetOrCreateFolder(accessToken, vehicleName, dateId, function(vehicleId) {
           gdGetOrCreateFolder(accessToken, rec.id, vehicleId, function(submissionId) {
             var fileIds = [];
+            var indexedIds = new Array(photoList.length);
             var index = 0;
 
             function uploadNext() {
               // Hand the folder id out so item photos reuse it instead of
               // re-searching for a folder Drive may not have indexed yet
-              if (index >= photoList.length) { onDone(fileIds, submissionId); return; }
-              upStart('walk', index);
+              if (index >= photoList.length) { onDone(fileIds, submissionId, indexedIds); return; }
+              if (!_driveArchivePass) upStart('walk', index);
               var fileName = 'photo_' + (index + 1) + '.jpg';
               gdUploadPhoto(accessToken, photoList[index], fileName, submissionId, function(fileId) {
-                upOk('walk');
+                if (!_driveArchivePass) upOk('walk');
                 fileIds.push(fileId);
+                indexedIds[index] = fileId;
                 index++;
                 uploadNext();
               }, function(err) {
@@ -1671,11 +1676,11 @@ function uploadPhotosToGoogleDrive(rec, photoList, onDone) {
               });
             }
             uploadNext();
-          }, function(err) { gdFail('Submission folder', err); queueAllWalkaround(); onDone([], null); });
-        }, function(err) { gdFail('Vehicle folder', err);      queueAllWalkaround(); onDone([], null); });
-      }, function(err) { gdFail('Date folder', err);           queueAllWalkaround(); onDone([], null); });
-    }, function(err) { gdFail('Root folder', err);             queueAllWalkaround(); onDone([], null); });
-  }, function(err) { gdFail('Token refresh', err);             queueAllWalkaround(); onDone([], null); });
+          }, function(err) { gdFail('Submission folder', err); queueAllWalkaround(); onDone([], null, []); });
+        }, function(err) { gdFail('Vehicle folder', err);      queueAllWalkaround(); onDone([], null, []); });
+      }, function(err) { gdFail('Date folder', err);           queueAllWalkaround(); onDone([], null, []); });
+    }, function(err) { gdFail('Root folder', err);             queueAllWalkaround(); onDone([], null, []); });
+  }, function(err) { gdFail('Token refresh', err);             queueAllWalkaround(); onDone([], null, []); });
 }
 
 // ── Upload progress screen ────────────────────────────────────────────────────
@@ -1789,6 +1794,7 @@ function submitChecklist() {
   };
 
   _photoErrors = [];
+  _archiveErrors = [];
 
   // Collect all item photos for upload
   var itemPhotoList = [];
@@ -1824,8 +1830,26 @@ function submitChecklist() {
   function dispatchUpload() {
   if (useDemoMediaStorage()) {
     uploadPhotosToMediaFileMode(responseRecord, walkaroundPhotos, itemPhotoList, function() {
-      responseRecord.items.forEach(function(item) { item.itemPhotos = []; });
-      saveResponseRecord(responseRecord);
+      if (useDriveArchive() && GD_CONFIG && GD_CONFIG.refreshToken) {
+        _driveArchivePass = true;
+        upRender('Archiving photos to Google Drive…');
+        uploadPhotosToGoogleDrive(responseRecord, photoArray, function(fileIds, submissionFolderId, indexedWalkaroundIds) {
+          responseRecord.gdFileIds = fileIds;
+          uploadItemPhotosToGoogleDrive(responseRecord, itemPhotoList, submissionFolderId, function(indexedItemIds) {
+            applyDriveIdsToManifest(responseRecord, walkaroundPhotos, itemPhotoList, indexedWalkaroundIds, indexedItemIds);
+            _driveArchivePass = false;
+            responseRecord.items.forEach(function(item) { item.itemPhotos = []; });
+            saveResponseRecord(responseRecord);
+          });
+        });
+      } else {
+        if (useDriveArchive() && responseRecord.capturedPhotoCount > 0) {
+          _archiveErrors.push('Google Drive is not connected; photos remain safely stored in MyGeotab.');
+          queueDriveArchive(photoArray, itemPhotoList);
+        }
+        responseRecord.items.forEach(function(item) { item.itemPhotos = []; });
+        saveResponseRecord(responseRecord);
+      }
     });
     return;
   }
@@ -1861,6 +1885,8 @@ function submitChecklist() {
 }
 
 var _photoErrors = [];
+var _archiveErrors = [];
+var _driveArchivePass = false;
 
 // Every Google Drive failure path routes through here. Previously they were
 // silent onDone() calls, which is why item photos could go missing with no
@@ -1869,12 +1895,27 @@ function gdFail(what, err) {
   var detail = !err ? 'unknown error'
     : (err.message ? err.message
     : (typeof err === 'string' ? err : JSON.stringify(err)));
-  _photoErrors.push(what + ' failed: ' + detail);
+  var message = what + ' failed: ' + detail;
+  if (_driveArchivePass) _archiveErrors.push(message);
+  else _photoErrors.push(message);
   console.error('[Google Drive] ' + what + ' failed:', err);
 }
 
 function useDemoMediaStorage() {
-  return PHOTO_STORAGE_MODE === 'mediafile_demo';
+  return PHOTO_STORAGE_MODE === 'mediafile_demo' || PHOTO_STORAGE_MODE === 'mediafile_then_drive';
+}
+
+function useDriveArchive() {
+  return PHOTO_STORAGE_MODE === 'mediafile_then_drive';
+}
+
+function queueDriveArchive(photoArray, itemPhotoList) {
+  photoArray.forEach(function(photo, index) {
+    queueLater('walkaround', photo, 'photo_' + (index + 1) + '.jpg', null, index);
+  });
+  itemPhotoList.forEach(function(entry) {
+    queueLater('item', entry.photo, 'item_' + entry.itemId + '_photo' + (entry.idx + 1) + '.jpg', entry.itemId, entry.idx);
+  });
 }
 
 function normalizeServerHost(host) {
@@ -2031,9 +2072,10 @@ function uploadMediaBinary(session, mediaFileId, blob, fileName, onDone, onError
     });
 }
 
-function uploadManifestEntryToMedia(session, entry, onDone) {
+function uploadManifestEntryToMedia(session, submissionId, entry, onDone) {
   var safeKey = (entry.key || 'photo').replace(/[^a-z0-9:_-]/gi, '_');
-  var fileName = 'checkin_' + safeKey.replace(/:/g, '_') + '.jpg';
+  var safeSubmissionId = String(submissionId || Date.now()).replace(/[^a-z0-9_-]/gi, '_');
+  var fileName = 'checkin_' + safeSubmissionId + '_' + safeKey.replace(/:/g, '_') + '.jpg';
   var blob = dataUrlToBlob(entry.dataUrl);
 
   apiCall('Add', {
@@ -2113,7 +2155,7 @@ function uploadPhotosToMediaFileMode(rec, walkaroundPhotos, itemPhotoList, onDon
       if (entry.kind === 'walkaround') upStart('walk', walkIndex);
       else upStart('item', itemIndex);
 
-      uploadManifestEntryToMedia(session, entry, function() {
+      uploadManifestEntryToMedia(session, rec.id, entry, function() {
         if (entry.state === 'ready') {
           if (entry.kind === 'walkaround') upOk('walk');
           else upOk('item');
@@ -2176,6 +2218,43 @@ function finalizeManifest(rec, manifestEntries) {
       .sort(function(a, b) { return (a.index || 0) - (b.index || 0); })
       .map(function(e) { return e.mediaFileId; });
   });
+}
+
+function applyDriveIdsToManifest(rec, walkaroundPhotos, itemPhotoList, indexedWalkaroundIds, indexedItemIds) {
+  var manifest = rec.photoManifest || [];
+  (walkaroundPhotos || []).forEach(function(photo, index) {
+    var fileId = indexedWalkaroundIds && indexedWalkaroundIds[index];
+    if (!fileId) return;
+    var entry = manifest.find(function(item) { return item.key === 'walkaround:' + photo.slot; });
+    if (entry) entry.gdFileId = fileId;
+  });
+  (itemPhotoList || []).forEach(function(photo) {
+    var fileId = indexedItemIds && indexedItemIds[photo.itemId] && indexedItemIds[photo.itemId][photo.idx];
+    if (!fileId) return;
+    var entry = manifest.find(function(item) { return item.key === 'item:' + photo.itemId + ':' + photo.idx; });
+    if (entry) entry.gdFileId = fileId;
+  });
+
+  manifest.forEach(function(entry) {
+    if (entry.gdFileId && !entry.mediaFileId) {
+      entry.state = 'ready';
+      entry.status = 'DriveReady';
+      entry.error = '';
+    }
+  });
+
+  rec.storedPhotoCount = manifest.filter(function(entry) {
+    return entry.state === 'ready' && !!(entry.mediaFileId || entry.gdFileId);
+  }).length;
+  rec.photoPendingCount = manifest.filter(function(entry) { return entry.state === 'pending'; }).length;
+  rec.photoFailedCount = manifest.filter(function(entry) { return entry.state === 'failed'; }).length;
+  if (rec.capturedPhotoCount === 0 || rec.storedPhotoCount === rec.capturedPhotoCount) rec.photoUploadStatus = 'complete';
+  else if (rec.storedPhotoCount === 0) rec.photoUploadStatus = 'failed';
+  else rec.photoUploadStatus = 'partial';
+
+  _photoErrors = manifest
+    .filter(function(entry) { return entry.state !== 'ready' || !(entry.mediaFileId || entry.gdFileId); })
+    .map(function(entry) { return entry.key + ' ' + entry.state + ': ' + (entry.error || entry.status || 'unknown'); });
 }
 
 function uploadPhotosSequentially(photoList, rec, index, onDone) {
@@ -2353,6 +2432,15 @@ function saveResponseRecord(rec) {
           }).join('')
         + '</div>';
     }
+    if (_archiveErrors.length) {
+      photoHtml += '<div style="margin-top:8px;padding:8px;border-radius:6px;background:#FFFBEB;border:1px solid #FDE68A">'
+        + '<div style="font-size:12px;font-weight:600;color:#92400E">Photos stored; Drive archive pending</div>'
+        + _archiveErrors.map(function(e) {
+            return '<div style="font-size:11px;color:#78350F;margin-top:2px">'
+              + String(e).replace(/</g, '&lt;') + '</div>';
+          }).join('')
+        + '</div>';
+    }
     document.getElementById('successPhotoRows').innerHTML = photoHtml;
     TODAY_SUBMISSIONS[rec.deviceId] = true; // badge shows if driver goes back
     showScreen('success');
@@ -2365,7 +2453,7 @@ function saveResponseRecord(rec) {
     var issuesLeft  = failedItems.length;
     function issuesDone() {
       if (issuesLeft > 0) return;
-      if (useDemoMediaStorage()) {
+      if (useDemoMediaStorage() && !useDriveArchive()) {
         refreshPendingBanner();
         return;
       }

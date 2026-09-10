@@ -28,7 +28,7 @@
 </head>
 <body class="min-h-screen">
 
-<div style="position:fixed;bottom:0.5rem;left:0.5rem;color:#94a3b8;font-size:0.65rem;z-index:999;">v20.1 ★</div>
+<div style="position:fixed;bottom:0.5rem;left:0.5rem;color:#94a3b8;font-size:0.65rem;z-index:999;">v20.2 ★</div>
 
 <!-- iOS floating back button — visible when past vehicle select screen -->
 <button id="ios-back-btn" onclick="iosGoBack()"
@@ -279,6 +279,14 @@
 <script>
 var ADDIN_ID   = 'a1Z2QF2s8nkajnj2rcMUsPQ';
 var GD_CONFIG  = null; // loaded from AddInData on boot
+// This page is public, so the Google client secret cannot live in it. The broker
+// holds the secret and only answers callers who prove they are signed into this
+// database. Source and deploy notes: ../../token-broker/
+var GD_TOKEN_BROKER = 'https://script.google.com/macros/s/AKfycbwFtJzkXWz5L1cxnIr5LVN_CYmniPYgq7dzNTN2-hENPXEskz7edVMtRkAb7GlbwAaZ/exec';
+var PHOTO_STORAGE_MODE = 'mediafile_demo'; // demo-only durability trial
+var MEDIA_UPLOAD_TIMEOUT_MS = 30000;
+var MEDIA_READY_TIMEOUT_MS  = 30000;
+var MEDIA_READY_POLL_MS     = 1500;
 var SESSION_KEY = 'myg_checkin_session';
 
 var SESSION = null;
@@ -1438,14 +1446,21 @@ function gdRefreshToken(onSuccess, onError) {
     onSuccess(GD_CONFIG.accessToken);
     return;
   }
-  fetch('https://oauth2.googleapis.com/token', {
+  if (!SESSION || !SESSION.sessionId) { onError('No MyGeotab session'); return; }
+  // Deliberately text/plain: that keeps this a CORS-simple request. Apps Script does
+  // not answer preflight, so an application/json content type never reaches the broker.
+  fetch(GD_TOKEN_BROKER, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      client_id:     '952584930356-4ks6d0mjjn6dmgk55fsqdv9sismgbhv9.apps.googleusercontent.com',
-      client_secret: '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',
-      refresh_token: GD_CONFIG.refreshToken,
-      grant_type:    'refresh_token'
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({
+      action:  'refresh',
+      session: {
+        server:    SESSION.server,
+        database:  SESSION.database,
+        userName:  SESSION.userName,
+        sessionId: SESSION.sessionId
+      },
+      refreshToken: GD_CONFIG.refreshToken
     })
   })
   .then(function(r) { return r.json(); })
@@ -1734,9 +1749,10 @@ function submitChecklist() {
     document.getElementById('failList').innerHTML = failedItems.map(function(i) { return '<li>' + i.label + '</li>'; }).join('');
   }
 
+  var submissionId = 'resp-' + Date.now();
   var responseRecord = {
     type:          'ChecklistResponse',
-    id:            'resp-' + Date.now(),
+    id:            submissionId,
     templateId:    CHECKLIST.id,
     templateName:  CHECKLIST.name,
     tripType:      (CHECKLIST.tripType && CHECKLIST.tripType !== 'any') ? CHECKLIST.tripType : (driverTripChoice || 'any'),
@@ -1748,6 +1764,13 @@ function submitChecklist() {
     overallStatus: failedItems.length > 0 ? 'fail' : 'pass',
     flaggedCount:  failedItems.length,
     photoCount:    PHOTO_SLOTS.filter(function(s) { return !!photos[s]; }).length,
+    photoStorageVersion: useDemoMediaStorage() ? 2 : 1,
+    photoUploadStatus: 'pending',
+    capturedPhotoCount: 0,
+    storedPhotoCount: 0,
+    photoPendingCount: 0,
+    photoFailedCount: 0,
+    photoManifest: [],
     mediaFileIds:  [],
     items:         CHECKLIST.items.map(function(i) {
       return {
@@ -1759,6 +1782,7 @@ function submitChecklist() {
         note:       (responses[i.id] && responses[i.id].note)          ? responses[i.id].note  : '',
         sides:      (responses[i.id] && responses[i.id].sides)         ? responses[i.id].sides : [],
         photoCount:  (responses[i.id] && responses[i.id].itemPhotos) ? responses[i.id].itemPhotos.length : 0,
+        mediaFileIds: [],
         itemPhotos:  (responses[i.id] && responses[i.id].itemPhotos) ? responses[i.id].itemPhotos : []
       };
     })
@@ -1776,8 +1800,13 @@ function submitChecklist() {
     }
   });
 
-  // Convert slots object to ordered array for upload
-  var photoArray = PHOTO_SLOTS.map(function(s) { return photos[s]; }).filter(Boolean);
+  // Keep walkaround slot identity for durable manifest records.
+  var walkaroundPhotos = PHOTO_SLOTS
+    .filter(function(slot) { return !!photos[slot]; })
+    .map(function(slot) { return { slot: slot, photo: photos[slot] }; });
+  var photoArray = walkaroundPhotos.map(function(x) { return x.photo; });
+
+  responseRecord.capturedPhotoCount = walkaroundPhotos.length + itemPhotoList.length;
 
   // Leave the form behind straight away — this is the driver's confirmation that
   // the tap registered, and it removes any chance of a second submit.
@@ -1793,6 +1822,14 @@ function submitChecklist() {
   dispatchUpload();
 
   function dispatchUpload() {
+  if (useDemoMediaStorage()) {
+    uploadPhotosToMediaFileMode(responseRecord, walkaroundPhotos, itemPhotoList, function() {
+      responseRecord.items.forEach(function(item) { item.itemPhotos = []; });
+      saveResponseRecord(responseRecord);
+    });
+    return;
+  }
+
   if (GD_CONFIG && GD_CONFIG.refreshToken) {
     // Upload vehicle photos to Google Drive
     uploadPhotosToGoogleDrive(responseRecord, photoArray, function(fileIds, submissionFolderId) {
@@ -1834,6 +1871,311 @@ function gdFail(what, err) {
     : (typeof err === 'string' ? err : JSON.stringify(err)));
   _photoErrors.push(what + ' failed: ' + detail);
   console.error('[Google Drive] ' + what + ' failed:', err);
+}
+
+function useDemoMediaStorage() {
+  return PHOTO_STORAGE_MODE === 'mediafile_demo';
+}
+
+function normalizeServerHost(host) {
+  var out = String(host || '').trim();
+  out = out.replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+  return out;
+}
+
+function resolveSessionServer(path, callbackServer) {
+  if (path && path !== 'ThisServer') return normalizeServerHost(path);
+  if (callbackServer) return normalizeServerHost(callbackServer);
+  if (SESSION && SESSION.server) return normalizeServerHost(SESSION.server);
+  return normalizeServerHost(location.hostname || '');
+}
+
+function getUploadSession(onSuccess, onError) {
+  if (SESSION && SESSION._driveApi && SESSION._driveApi.getSession) {
+    try {
+      SESSION._driveApi.getSession(function(s, server) {
+        if (!s || !s.sessionId) { onError('No MyGeotab session'); return; }
+        onSuccess({
+          server: resolveSessionServer(s.path, server),
+          database: s.database,
+          sessionId: s.sessionId,
+          userName: s.userName
+        });
+      });
+      return;
+    } catch (e) {}
+  }
+  if (SESSION && SESSION.sessionId) {
+    onSuccess({
+      server: resolveSessionServer(SESSION.path, SESSION.server),
+      database: SESSION.database,
+      sessionId: SESSION.sessionId,
+      userName: SESSION.userName
+    });
+    return;
+  }
+  onError('No MyGeotab session');
+}
+
+function fetchWithTimeout(url, options, timeoutMs) {
+  timeoutMs = timeoutMs || 20000;
+  if (typeof AbortController === 'undefined') {
+    return new Promise(function(resolve, reject) {
+      var done = false;
+      var timer = setTimeout(function() {
+        if (done) return;
+        done = true;
+        reject(new Error('Request timed out after ' + timeoutMs + 'ms'));
+      }, timeoutMs);
+      fetch(url, options)
+        .then(function(resp) {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          resolve(resp);
+        })
+        .catch(function(err) {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          reject(err);
+        });
+    });
+  }
+
+  var ctrl = new AbortController();
+  var opts = options || {};
+  var withSignal = {};
+  for (var k in opts) {
+    if (Object.prototype.hasOwnProperty.call(opts, k)) withSignal[k] = opts[k];
+  }
+  withSignal.signal = ctrl.signal;
+  var timer2 = setTimeout(function() { ctrl.abort(); }, timeoutMs);
+  return fetch(url, withSignal)
+    .then(function(resp) { clearTimeout(timer2); return resp; })
+    .catch(function(err) {
+      clearTimeout(timer2);
+      if (err && err.name === 'AbortError') {
+        throw new Error('Request timed out after ' + timeoutMs + 'ms');
+      }
+      throw err;
+    });
+}
+
+function mediaStatusValue(media) {
+  if (!media) return 'Unknown';
+  if (typeof media.status === 'string') return media.status;
+  if (media.status && typeof media.status === 'object') {
+    if (media.status.id) return media.status.id;
+    if (media.status.name) return media.status.name;
+  }
+  return 'Unknown';
+}
+
+function waitForMediaReady(mediaFileId, startTs, onDone) {
+  apiCall('Get', { typeName: 'MediaFile', search: { id: mediaFileId } }, function(results) {
+    var media = results && results[0] ? results[0] : null;
+    var status = mediaStatusValue(media);
+    if (status === 'Ready') {
+      onDone({ state: 'ready', status: status });
+      return;
+    }
+    if (Date.now() - startTs >= MEDIA_READY_TIMEOUT_MS) {
+      onDone({ state: 'pending', status: status, error: 'Timed out waiting for Ready status' });
+      return;
+    }
+    setTimeout(function() { waitForMediaReady(mediaFileId, startTs, onDone); }, MEDIA_READY_POLL_MS);
+  }, function(err) {
+    if (Date.now() - startTs >= MEDIA_READY_TIMEOUT_MS) {
+      onDone({ state: 'failed', status: 'Unknown', error: 'Status check failed: ' + (err && err.message ? err.message : String(err)) });
+      return;
+    }
+    setTimeout(function() { waitForMediaReady(mediaFileId, startTs, onDone); }, MEDIA_READY_POLL_MS);
+  });
+}
+
+function removeMediaFileBestEffort(mediaFileId, onDone) {
+  apiCall('Remove', { typeName: 'MediaFile', entity: { id: mediaFileId } },
+    function() { if (onDone) onDone(); },
+    function() { if (onDone) onDone(); });
+}
+
+function uploadMediaBinary(session, mediaFileId, blob, fileName, onDone, onError) {
+  var params = {
+    method: 'UploadMediaFile',
+    params: {
+      credentials: {
+        database: session.database,
+        sessionId: session.sessionId,
+        userName: session.userName
+      },
+      mediaFile: { id: mediaFileId }
+    }
+  };
+
+  var formData = new FormData();
+  formData.append('JSON-RPC', encodeURIComponent(JSON.stringify(params)));
+  formData.append(fileName, blob, fileName);
+
+  fetchWithTimeout('https://' + session.server + '/apiv1/', { method: 'POST', body: formData }, MEDIA_UPLOAD_TIMEOUT_MS)
+    .then(function(resp) { return resp.json(); })
+    .then(function(data) {
+      if (data && data.error) {
+        onError(data.error && data.error.message ? data.error.message : JSON.stringify(data.error));
+        return;
+      }
+      onDone();
+    })
+    .catch(function(err) {
+      onError(err && err.message ? err.message : String(err));
+    });
+}
+
+function uploadManifestEntryToMedia(session, entry, onDone) {
+  var safeKey = (entry.key || 'photo').replace(/[^a-z0-9:_-]/gi, '_');
+  var fileName = 'checkin_' + safeKey.replace(/:/g, '_') + '.jpg';
+  var blob = dataUrlToBlob(entry.dataUrl);
+
+  apiCall('Add', {
+    typeName: 'MediaFile',
+    entity: {
+      name: fileName,
+      mediaType: 'Image',
+      solutionId: 'aDAyN2U4MjEtZGRhZS00NjQ'
+    }
+  }, function(mediaFileId) {
+    uploadMediaBinary(session, mediaFileId, blob, fileName, function() {
+      waitForMediaReady(mediaFileId, Date.now(), function(state) {
+        entry.state = state.state;
+        entry.status = state.status;
+        entry.error = state.error || '';
+        if (state.state === 'ready' || state.state === 'pending') {
+          entry.mediaFileId = mediaFileId;
+        }
+        onDone();
+      });
+    }, function(errMsg) {
+      removeMediaFileBestEffort(mediaFileId, function() {
+        entry.state = 'failed';
+        entry.status = 'NoFile';
+        entry.error = 'Upload failed: ' + errMsg;
+        onDone();
+      });
+    });
+  }, function(err) {
+    entry.state = 'failed';
+    entry.status = 'Unknown';
+    entry.error = 'Create MediaFile failed: ' + (err && err.message ? err.message : String(err));
+    onDone();
+  });
+}
+
+function uploadPhotosToMediaFileMode(rec, walkaroundPhotos, itemPhotoList, onDone) {
+  getUploadSession(function(session) {
+    var manifestEntries = [];
+    walkaroundPhotos.forEach(function(entry) {
+      manifestEntries.push({
+        key: 'walkaround:' + entry.slot,
+        kind: 'walkaround',
+        slot: entry.slot,
+        mediaFileId: '',
+        state: 'pending',
+        status: 'Unknown',
+        error: '',
+        dataUrl: entry.photo
+      });
+    });
+    itemPhotoList.forEach(function(entry) {
+      manifestEntries.push({
+        key: 'item:' + entry.itemId + ':' + entry.idx,
+        kind: 'item',
+        itemId: entry.itemId,
+        index: entry.idx,
+        mediaFileId: '',
+        state: 'pending',
+        status: 'Unknown',
+        error: '',
+        dataUrl: entry.photo
+      });
+    });
+
+    var walkIndex = 0;
+    var itemIndex = 0;
+
+    function next(i) {
+      if (i >= manifestEntries.length) {
+        finalizeManifest(rec, manifestEntries);
+        onDone();
+        return;
+      }
+
+      var entry = manifestEntries[i];
+      if (entry.kind === 'walkaround') upStart('walk', walkIndex);
+      else upStart('item', itemIndex);
+
+      uploadManifestEntryToMedia(session, entry, function() {
+        if (entry.state === 'ready') {
+          if (entry.kind === 'walkaround') upOk('walk');
+          else upOk('item');
+        } else {
+          _photoErrors.push(entry.key + ' ' + entry.state + ': ' + (entry.error || entry.status || 'unknown'));
+        }
+
+        if (entry.kind === 'walkaround') walkIndex++;
+        else itemIndex++;
+        next(i + 1);
+      });
+    }
+
+    next(0);
+  }, function(err) {
+    _photoErrors.push('Media upload unavailable: ' + err);
+    finalizeManifest(rec, []);
+    onDone();
+  });
+}
+
+function finalizeManifest(rec, manifestEntries) {
+  var captured = manifestEntries.length;
+  var readyEntries = manifestEntries.filter(function(e) { return e.state === 'ready' && !!e.mediaFileId; });
+  var pendingEntries = manifestEntries.filter(function(e) { return e.state === 'pending'; });
+  var failedEntries = manifestEntries.filter(function(e) { return e.state === 'failed'; });
+
+  rec.photoStorageVersion = 2;
+  rec.photoManifest = manifestEntries.map(function(e) {
+    return {
+      key: e.key,
+      kind: e.kind,
+      slot: e.slot,
+      itemId: e.itemId,
+      index: (typeof e.index === 'number') ? e.index : undefined,
+      mediaFileId: e.mediaFileId || '',
+      state: e.state,
+      status: e.status,
+      error: e.error || ''
+    };
+  });
+
+  rec.capturedPhotoCount = captured;
+  rec.storedPhotoCount = readyEntries.length;
+  rec.photoPendingCount = pendingEntries.length;
+  rec.photoFailedCount = failedEntries.length;
+
+  if (captured === 0) rec.photoUploadStatus = 'complete';
+  else if (readyEntries.length === captured) rec.photoUploadStatus = 'complete';
+  else if (readyEntries.length === 0) rec.photoUploadStatus = 'failed';
+  else rec.photoUploadStatus = 'partial';
+
+  rec.mediaFileIds = readyEntries
+    .filter(function(e) { return e.kind === 'walkaround'; })
+    .map(function(e) { return e.mediaFileId; });
+
+  (rec.items || []).forEach(function(item) {
+    item.mediaFileIds = readyEntries
+      .filter(function(e) { return e.kind === 'item' && e.itemId === item.id; })
+      .sort(function(a, b) { return (a.index || 0) - (b.index || 0); })
+      .map(function(e) { return e.mediaFileId; });
+  });
 }
 
 function uploadPhotosSequentially(photoList, rec, index, onDone) {
@@ -1882,11 +2224,11 @@ function uploadPhotosSequentially(photoList, rec, index, onDone) {
 
     if (SESSION && SESSION._driveApi) {
       SESSION._driveApi.getSession(function(s) {
-        var server = (s.path && s.path !== 'ThisServer') ? s.path : 'my.geotab.com';
+        var server = resolveSessionServer(s.path, null);
         doUpload(server, s.database, s.sessionId, s.userName);
       });
     } else {
-      doUpload(SESSION.server, SESSION.database, SESSION.sessionId, SESSION.userName);
+      doUpload(resolveSessionServer(SESSION.path, SESSION.server), SESSION.database, SESSION.sessionId, SESSION.userName);
     }
   }, function(err) {
     _photoErrors.push('Add MediaFile error: ' + JSON.stringify(err));
@@ -1912,36 +2254,93 @@ function saveResponseRecord(rec) {
     }
   });
   if (strippedPhotos > 0) {
-    // Not lost — the submit path queued these before calling us. Say so, since
-    // the success screen would otherwise read as a plain failure.
-    gdFail(strippedPhotos + ' checklist photo(s) not uploaded yet',
-      gdReason() + '. They are saved on this device and will upload automatically.');
+    if (useDemoMediaStorage()) {
+      gdFail(strippedPhotos + ' checklist photo(s) missing',
+        'These photos were not stored durably and must be recaptured.');
+    } else {
+      // Not lost — the submit path queued these before calling us. Say so, since
+      // the success screen would otherwise read as a plain failure.
+      gdFail(strippedPhotos + ' checklist photo(s) not uploaded yet',
+        gdReason() + '. They are saved on this device and will upload automatically.');
+    }
+  }
+
+  if (rec.photoStorageVersion !== 2) {
+    var walkStoredLegacy = rec.gdFileIds ? rec.gdFileIds.length : (rec.mediaFileIds ? rec.mediaFileIds.length : 0);
+    var walkTotalLegacy = rec.photoCount || 0;
+    var itemStoredLegacy = (rec.items || []).reduce(function(sum, item) {
+      return sum + (item.gdItemPhotoIds ? item.gdItemPhotoIds.length : (item.mediaFileIds ? item.mediaFileIds.length : 0));
+    }, 0);
+    var itemTotalLegacy = (rec.items || []).reduce(function(sum, item) {
+      return sum + (item.photoCount || 0);
+    }, 0);
+    rec.capturedPhotoCount = walkTotalLegacy + itemTotalLegacy;
+    rec.storedPhotoCount = walkStoredLegacy + itemStoredLegacy;
+    rec.photoPendingCount = 0;
+    rec.photoFailedCount = Math.max(rec.capturedPhotoCount - rec.storedPhotoCount, 0);
+    if (rec.capturedPhotoCount === 0) rec.photoUploadStatus = 'complete';
+    else if (rec.storedPhotoCount === rec.capturedPhotoCount) rec.photoUploadStatus = 'complete';
+    else if (rec.storedPhotoCount === 0) rec.photoUploadStatus = 'failed';
+    else rec.photoUploadStatus = 'partial';
   }
 
   apiCall('Add', {
     typeName: 'AddInData',
     entity: { addInId: ADDIN_ID, details: rec }
   }, function(id) {
-    var walkaroundSaved = rec.gdFileIds ? rec.gdFileIds.length : (rec.mediaFileIds ? rec.mediaFileIds.length : 0);
-    var walkaroundTotal = rec.photoCount;
-    var checklistSaved  = rec.items.reduce(function(sum, i) {
-      return sum + (i.gdItemPhotoIds ? i.gdItemPhotoIds.length : (i.itemPhotos ? i.itemPhotos.length : 0));
-    }, 0);
+    var walkaroundSaved = 0;
+    var walkaroundTotal = rec.photoCount || 0;
+    var checklistSaved  = 0;
     var checklistTotal  = rec.items.reduce(function(sum, i) { return sum + (i.photoCount || 0); }, 0);
+
+    if (rec.photoStorageVersion === 2 && Array.isArray(rec.photoManifest)) {
+      var walkEntries = rec.photoManifest.filter(function(p) { return p.kind === 'walkaround'; });
+      var itemEntries = rec.photoManifest.filter(function(p) { return p.kind === 'item'; });
+      walkaroundTotal = walkEntries.length;
+      checklistTotal  = itemEntries.length;
+      walkaroundSaved = walkEntries.filter(function(p) { return p.state === 'ready' && !!p.mediaFileId; }).length;
+      checklistSaved  = itemEntries.filter(function(p) { return p.state === 'ready' && !!p.mediaFileId; }).length;
+    } else {
+      walkaroundSaved = rec.gdFileIds ? rec.gdFileIds.length : (rec.mediaFileIds ? rec.mediaFileIds.length : 0);
+      checklistSaved  = rec.items.reduce(function(sum, i) {
+        return sum + (i.gdItemPhotoIds ? i.gdItemPhotoIds.length : (i.mediaFileIds ? i.mediaFileIds.length : 0));
+      }, 0);
+    }
+
+    var capturedTotal = rec.capturedPhotoCount || (walkaroundTotal + checklistTotal);
+    var storedTotal   = rec.storedPhotoCount || (walkaroundSaved + checklistSaved);
+    var pendingTotal  = rec.photoPendingCount || 0;
+    var failedTotal   = rec.photoFailedCount || Math.max(capturedTotal - storedTotal - pendingTotal, 0);
+
     var totalItems  = rec.items.length;
     var passCount   = rec.items.filter(function(i) { return i.value === 'pass' || i.value === 'yes'; }).length;
     var failCount   = rec.items.filter(function(i) { return i.value === 'fail' || i.value === 'no'; }).length;
     document.getElementById('successItemCount').textContent =
       totalItems + ' items · ' + passCount + ' Pass / ' + failCount + ' Fail';
+
+    var successTitle = document.querySelector('#screen-success h1');
+    if (successTitle) {
+      successTitle.textContent = (storedTotal === capturedTotal)
+        ? 'Checklist Submitted'
+        : 'Checklist Saved — Photos Incomplete';
+    }
+
     function photoRow(label, saved, total) {
       return '<div class="flex items-center justify-between">'
         + '<span class="text-sm text-slate-500">' + label + '</span>'
-        + '<span class="font-semibold text-slate-700 text-sm">' + saved + ' / ' + total + ' uploaded</span>'
+        + '<span class="font-semibold text-slate-700 text-sm">' + saved + ' / ' + total + ' stored</span>'
         + '</div>';
     }
     var photoHtml = photoRow('Walkaround photos', walkaroundSaved, walkaroundTotal);
     if (checklistTotal > 0) {
       photoHtml += photoRow('Checklist photos', checklistSaved, checklistTotal);
+    }
+    if (capturedTotal > 0) {
+      photoHtml += '<div class="flex items-center justify-between">'
+        + '<span class="text-sm text-slate-500">Overall photo status</span>'
+        + '<span class="font-semibold text-slate-700 text-sm">'
+        + storedTotal + ' stored · ' + pendingTotal + ' pending · ' + failedTotal + ' failed'
+        + '</span></div>';
     }
     // Show what went wrong rather than reporting a clean success over missing
     // photos. _photoErrors was collected but never rendered before this.
@@ -1966,6 +2365,10 @@ function saveResponseRecord(rec) {
     var issuesLeft  = failedItems.length;
     function issuesDone() {
       if (issuesLeft > 0) return;
+      if (useDemoMediaStorage()) {
+        refreshPendingBanner();
+        return;
+      }
       // Only now are all the ids known, so the queue entries can point at both
       // the response record and the issue record they belong to.
       pqFlushToStore(rec, id, issueIdsByItem, function(stored) {
@@ -1989,6 +2392,7 @@ function saveResponseRecord(rec) {
         itemNote:      item.note || '',
         itemSides:     item.sides || [],
         gdItemPhotoIds: item.gdItemPhotoIds || [],
+        itemMediaFileIds: item.mediaFileIds || [],
         vehicleName:   rec.deviceName,
         driverName:    rec.driverName,
         submittedAt:   rec.submittedAt,

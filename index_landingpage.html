@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
 <title>Vehicle Check-In · Driver</title>
 <script src="https://cdn.tailwindcss.com"></script>
+<script src="response-storage.js"></script>
 <style>
   body { font-family: 'Segoe UI', system-ui, sans-serif; background:#f1f5f9; }
   .pass-btn.active  { background:#16a34a; color:white; border-color:#16a34a; }
@@ -28,7 +29,7 @@
 </head>
 <body class="min-h-screen">
 
-<div style="position:fixed;bottom:0.5rem;left:0.5rem;color:#94a3b8;font-size:0.65rem;z-index:999;">v20.6 ★</div>
+<div style="position:fixed;bottom:0.5rem;left:0.5rem;color:#94a3b8;font-size:0.65rem;z-index:999;">v20.10 ★</div>
 
 <!-- iOS floating back button — visible when past vehicle select screen -->
 <button id="ios-back-btn" onclick="iosGoBack()"
@@ -221,12 +222,94 @@
     </div>
 
     <div id="submitArea">
-      <button id="submitBtn" onclick="submitChecklist()" disabled
+      <button id="submitBtn" onclick="continueToReviewOrSubmit()" disabled
               class="w-full py-3.5 rounded-xl font-semibold text-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed bg-green-600 text-white hover:bg-green-700">
         Submit Checklist
       </button>
       <p class="text-xs text-slate-400 text-center mt-2" id="photoRequiredNote">All 4 photos required to submit</p>
     </div>
+  </div>
+</div>
+
+<!-- ═══ SCREEN 2b: Review + Sign-off ═══════════════════════════════════════════ -->
+<div id="screen-review" class="screen hidden flex flex-col" style="height:100dvh;overflow:hidden;">
+  <header class="bg-[#0047BB] text-white px-5 py-4 shadow">
+    <div class="flex items-center gap-3">
+      <button onclick="goBackFromReview()" class="text-blue-200 hover:text-white" aria-label="Back">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+      </button>
+      <div>
+        <p class="font-semibold">Final Review and Signature</p>
+        <p id="reviewVehicleName" class="text-blue-200 text-xs mt-0.5"></p>
+      </div>
+    </div>
+  </header>
+
+  <div class="flex-1 overflow-y-auto max-w-lg mx-auto w-full p-4 space-y-4" id="reviewContentWrap">
+    <div class="bg-white border border-slate-200 rounded-2xl p-4">
+      <p class="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-2">Checklist</p>
+      <p id="reviewChecklistName" class="text-base font-semibold text-slate-800"></p>
+      <p id="reviewNoItemsMsg" class="text-sm text-slate-500 mt-2 hidden">No checklist questions were required.</p>
+    </div>
+
+    <div id="reviewQuestions" class="bg-white border border-slate-200 rounded-2xl p-4 hidden">
+      <p class="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-3">Responses</p>
+      <div id="reviewQuestionsList" class="space-y-3"></div>
+      <button type="button" onclick="editChecklistFromReview()" class="mt-4 w-full py-2.5 rounded-xl border border-slate-300 text-slate-600 text-sm font-semibold">Edit checklist</button>
+    </div>
+
+    <div id="reviewWalkaround" class="bg-white border border-slate-200 rounded-2xl p-4 hidden">
+      <p class="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-3">End-of-check photos</p>
+      <div id="reviewWalkaroundGrid" class="grid grid-cols-2 gap-2"></div>
+      <button type="button" onclick="retakePhotosFromReview()" class="mt-4 w-full py-2.5 rounded-xl border border-slate-300 text-slate-600 text-sm font-semibold">Retake end photos</button>
+    </div>
+
+    <div class="bg-white border border-slate-200 rounded-2xl p-4">
+      <p class="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-3">Operational sign-off</p>
+      <div id="signoffPrompt" class="space-y-2">
+        <p id="signoffPromptText" class="text-sm text-slate-600">A signature is required before this checklist can be submitted.</p>
+        <button id="provideSignatureBtn" type="button" onclick="openSignaturePanel()"
+                class="w-full py-3 rounded-xl border-2 border-blue-200 bg-blue-50 text-blue-700 text-sm font-semibold">
+          Provide Signature
+        </button>
+      </div>
+      <div id="signaturePanel" class="hidden space-y-3">
+        <div>
+          <label for="signeeNameInput" class="block text-sm font-semibold text-slate-700 mb-1">Signee name</label>
+          <input id="signeeNameInput" type="text" autocomplete="off" placeholder="Enter full name" maxlength="200"
+                 class="w-full border-2 border-slate-200 focus:border-blue-400 rounded-xl px-4 py-3 text-sm focus:outline-none"
+                 oninput="onSigneeNameInput(this.value)">
+        </div>
+        <div>
+          <p class="text-xs text-slate-500">Signing time (automatic)</p>
+          <p id="reviewSignedAtText" class="text-sm font-semibold text-slate-700">Will be captured when signature is confirmed</p>
+        </div>
+        <div>
+          <p class="text-sm font-semibold text-slate-700 mb-2">Signature</p>
+          <div class="border border-slate-300 rounded-xl bg-white overflow-hidden">
+            <canvas id="signoffCanvas" style="width:100%;height:200px;touch-action:none;display:block;"></canvas>
+          </div>
+          <div class="flex items-center justify-between mt-2">
+            <p id="signoffHint" class="text-xs text-slate-500">Draw signature with finger, mouse, or stylus.</p>
+            <button type="button" onclick="clearSignatureCanvas()" class="text-xs font-semibold text-blue-600">Clear signature</button>
+          </div>
+        </div>
+        <button id="confirmSignatureBtn" type="button" onclick="confirmSignature()" disabled
+                class="w-full py-3 rounded-xl font-semibold text-sm bg-blue-600 text-white opacity-40 cursor-not-allowed">
+          Confirm signature
+        </button>
+        <button type="button" onclick="closeSignaturePanel()" class="w-full py-2.5 rounded-xl border border-slate-300 text-slate-600 text-sm font-semibold">
+          Cancel
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="bg-white border-t border-slate-200 px-5 py-4 max-w-lg mx-auto w-full flex-shrink-0">
+    <button id="confirmSubmitBtn" type="button" onclick="prepareConfirmSubmit()" disabled
+            class="w-full py-3.5 rounded-xl font-semibold text-sm bg-green-600 text-white opacity-40 cursor-not-allowed transition-all">
+      Confirm and submit
+    </button>
   </div>
 </div>
 
@@ -275,6 +358,33 @@
     </div>
     <div id="successPhotoRows"></div>
   </div>
+  <button type="button" onclick="resetAfterSuccess()" class="mt-6 text-sm font-semibold text-blue-600">Start another check-in</button>
+</div>
+
+<!-- Confirm submit dialog -->
+<div id="confirmSubmitModal" class="hidden fixed inset-0 z-50" style="background:rgba(0,0,0,0.5);display:none;align-items:center;justify-content:center;padding:20px;">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-5">
+    <h2 class="text-base font-bold text-slate-800 mb-2">Submit signed checklist?</h2>
+    <p class="text-sm text-slate-600 leading-relaxed">This will complete the checklist and upload its responses, photographs and signature to MyGeotab and the configured Google Drive. Return to the review if anything needs changing.</p>
+    <div class="mt-5 flex gap-2">
+      <button type="button" onclick="closeConfirmSubmitModal()" class="flex-1 py-2.5 rounded-xl border border-slate-300 text-slate-700 text-sm font-semibold">Return to review</button>
+      <button type="button" id="confirmSubmitModalBtn" onclick="confirmSubmitAfterReview()" class="flex-1 py-2.5 rounded-xl bg-green-600 text-white text-sm font-semibold">Confirm and submit</button>
+    </div>
+  </div>
+</div>
+
+<!-- Review photo full screen -->
+<div id="reviewPhotoModal" class="hidden fixed inset-0 z-50" style="background:rgba(0,0,0,0.88);display:none;flex-direction:column;">
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;color:#fff;">
+    <button type="button" onclick="closeReviewPhotoModal()" style="border:1px solid rgba(255,255,255,0.45);background:transparent;color:#fff;border-radius:999px;padding:6px 12px;font-size:12px;font-weight:700;">Close</button>
+    <span id="reviewPhotoCounter" style="font-size:12px;font-weight:700;color:#cbd5e1;">1 / 1</span>
+    <div style="width:56px"></div>
+  </div>
+  <div style="flex:1;display:flex;align-items:center;justify-content:center;position:relative;padding:0 8px 16px 8px;">
+    <button type="button" onclick="prevReviewPhoto()" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);border:none;background:rgba(15,23,42,0.6);color:#fff;border-radius:999px;width:36px;height:36px;font-size:20px;">‹</button>
+    <img id="reviewPhotoModalImg" alt="Review photo" style="max-width:100%;max-height:100%;object-fit:contain;border-radius:10px;">
+    <button type="button" onclick="nextReviewPhoto()" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);border:none;background:rgba(15,23,42,0.6);color:#fff;border-radius:999px;width:36px;height:36px;font-size:20px;">›</button>
+  </div>
 </div>
 
 <script>
@@ -289,12 +399,15 @@ var MEDIA_UPLOAD_TIMEOUT_MS = 30000;
 var MEDIA_READY_TIMEOUT_MS  = 30000;
 var MEDIA_READY_POLL_MS     = 1500;
 var MEDIA_IMAGE_MAX_BYTES   = 10 * 1024 * 1024;
+var RESPONSE_TEXT_MAX_LENGTH = 4000;
+var NUMBER_RESPONSE_MAX_LENGTH = 32;
+var SIGNATURE_DRAW_PADDING = 10;
 var SESSION_KEY = 'myg_checkin_session';
 
 var SESSION = null;
 var DRIVER    = { id: '', name: '…' };
 var VEHICLES  = [];
-var CHECKLIST  = { id: '', name: '…', requirePhotos: true, items: [] };
+var CHECKLIST  = { id: '', name: '…', requirePhotos: true, requireSignoff: false, items: [] };
 var ALL_TEMPLATES = [];
 var VISIBLE_VEHICLES = []; // vehicles this driver can actually select
 var TODAY_SUBMISSIONS = {}; // deviceId → true if driver already submitted today
@@ -303,6 +416,34 @@ var responses = {};
 var photos    = {}; // { front, left, right, rear }
 var PHOTO_SLOTS = ['front', 'left', 'right', 'rear'];
 var _currentSlot = null; // which slot camera is open for
+
+var SIGNOFF = {
+  signeeName: '',
+  signedAtUtc: '',
+  localDate: '',
+  timezoneOffsetMinutes: null,
+  signatureDataUrl: '',
+  hasStroke: false,
+  cardDataUrl: '',
+  cardMediaFileId: '',
+  cardDriveFileId: '',
+  archiveStatus: 'pending',
+  confirmed: false,
+  acknowledgementVersion: 1,
+  acknowledgementText: 'I acknowledge that I reviewed the checklist information and photographs shown.'
+};
+
+var _activeSubmissionId = '';
+var _activeResponseBatch = null;
+var _responseBatchRecoveryRunning = false;
+var _responseWorkerId = 'worker-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+var _reviewPhotos = [];
+var _reviewPhotoIndex = 0;
+var _reviewPhotoLastFocus = null;
+var _signaturePadReady = false;
+var _signatureDrawing = false;
+var _signatureLast = null;
+var _draftSaveTimer = null;
 
 // ── Direct MyGeotab JSON-RPC ──────────────────────────────────────────────────
 function rpc(method, params, onSuccess, onError) {
@@ -459,6 +600,17 @@ window.addEventListener('DOMContentLoaded', function() {
   }, 2000);
 });
 
+window.addEventListener('resize', function() {
+  var panel = document.getElementById('signaturePanel');
+  if (_currentScreen === 'review' && panel && !panel.classList.contains('hidden')) resizeSignatureCanvas(true);
+});
+
+window.addEventListener('online', function() {
+  resumePendingResponseBatches(function(recovered) {
+    if (recovered) refreshTodaySubmissionBadges();
+  });
+});
+
 // ── Load data ─────────────────────────────────────────────────────────────────
 function loadData() {
   document.getElementById('loadingVehicles').textContent = 'Connecting…';
@@ -466,13 +618,16 @@ function loadData() {
   // same GitHub Pages origin, so queue work must be scoped to this database.
   loadGdConfig(function() {
     getUploadSession(function() {
-      pqClaimLegacyEntries(function() {
-        pqPrune(function() {
-          refreshPendingBanner();
-          checkPhotoStorageReadiness(function(status) {
-            if (!status.driveReady) return;
-            flushPendingPhotos(function(msg, uploaded) {
-              if (uploaded) console.log('[Queue] boot flush: ' + msg);
+      resumePendingResponseBatches(function(recovered) {
+        if (recovered) refreshTodaySubmissionBadges();
+        pqClaimLegacyEntries(function() {
+          pqPrune(function() {
+            refreshPendingBanner();
+            checkPhotoStorageReadiness(function(status) {
+              if (!status.driveReady) return;
+              flushPendingPhotos(function(msg, uploaded) {
+                if (uploaded) console.log('[Queue] boot flush: ' + msg);
+              });
             });
           });
         });
@@ -546,6 +701,7 @@ function loadData() {
     var todayStr = new Date().toISOString().slice(0, 10); // 'YYYY-MM-DD'
     allDetails.filter(function(d) {
       return d.type === 'ChecklistResponse'
+        && (!d.multipartStatus || d.multipartStatus === 'complete')
         && d.driverId === DRIVER.id
         && d.submittedAt && d.submittedAt.slice(0, 10) === todayStr;
     }).forEach(function(d) { TODAY_SUBMISSIONS[d.deviceId] = true; });
@@ -559,13 +715,46 @@ function loadData() {
   }, function() { done(); });
 }
 
+function refreshTodaySubmissionBadges() {
+  apiCall('Get', { typeName: 'AddInData', search: { addInId: ADDIN_ID } }, function(results) {
+    var todayStr = new Date().toISOString().slice(0, 10);
+    (results || []).forEach(function(row) {
+      var details = row.details || {};
+      if (details.type === 'ChecklistResponse'
+          && (!details.multipartStatus || details.multipartStatus === 'complete')
+          && details.driverId === DRIVER.id
+          && details.submittedAt && details.submittedAt.slice(0, 10) === todayStr) {
+        TODAY_SUBMISSIONS[details.deviceId] = true;
+      }
+    });
+    if (VISIBLE_VEHICLES.length) renderVehicleList();
+  }, function(err) { console.warn('[Response storage] Could not refresh submission badges:', err); });
+}
+
 // ── Template helpers ──────────────────────────────────────────────────────────
 function applyTemplate(tmpl) {
+  SIGNOFF = {
+    signeeName: '',
+    signedAtUtc: '',
+    localDate: '',
+    timezoneOffsetMinutes: null,
+    signatureDataUrl: '',
+    hasStroke: false,
+    cardDataUrl: '',
+    cardMediaFileId: '',
+    cardDriveFileId: '',
+    archiveStatus: 'pending',
+    confirmed: false,
+    acknowledgementVersion: 1,
+    acknowledgementText: 'I acknowledge that I reviewed the checklist information and photographs shown.'
+  };
+
   CHECKLIST = {
     id: tmpl.id,
     name: tmpl.name,
     tripType: tmpl.tripType || 'any',
     requirePhotos: tmpl.requirePhotos !== false,
+    requireSignoff: tmpl.requireSignoff === true,
     items: (tmpl.items || []).map(function(item, i) {
       return Object.assign({}, item, { id: item.id || ('i' + i) });
     })
@@ -573,15 +762,34 @@ function applyTemplate(tmpl) {
   initTripChoice();
   document.getElementById('checklistTitle').textContent = CHECKLIST.name;
   var toPhotosBtn = document.getElementById('toPhotosBtn');
+  var submitBtn = document.getElementById('submitBtn');
   if (!CHECKLIST.requirePhotos) {
     document.getElementById('submitBtn').disabled = false;
     document.getElementById('photoRequiredNote').textContent = 'Photos optional';
-    toPhotosBtn.textContent = 'Submit Checklist';
-    toPhotosBtn.onclick = submitChecklist;
+    toPhotosBtn.textContent = CHECKLIST.requireSignoff ? 'Review and sign' : 'Submit Checklist';
+    toPhotosBtn.onclick = continueToReviewOrSubmit;
   } else {
+    if (submitBtn) submitBtn.textContent = CHECKLIST.requireSignoff ? 'Continue to review' : 'Submit Checklist';
     toPhotosBtn.textContent = 'Continue to Photos';
     toPhotosBtn.onclick = showPhotos;
   }
+}
+
+function hasChecklistQuestions() {
+  return !!(CHECKLIST && CHECKLIST.items && CHECKLIST.items.length);
+}
+
+function enterChecklistFlowForTemplate() {
+  if (!hasChecklistQuestions() && CHECKLIST.requirePhotos) {
+    showPhotos();
+    return;
+  }
+  if (!hasChecklistQuestions() && CHECKLIST.requireSignoff) {
+    showReviewSignoff();
+    return;
+  }
+  showScreen('checklist');
+  renderChecklist();
 }
 
 function pickTemplatesForVehicle(vehicleId) {
@@ -679,6 +887,7 @@ function selectVehicle(id) {
   document.getElementById('selectedVehicle').textContent = selectedVehicle.name + (selectedVehicle.plate ? ' · ' + selectedVehicle.plate : '');
   responses = {};
   photos    = {};
+  _activeSubmissionId = '';
 
   // Find all matching templates
   var templates = pickTemplatesForVehicle(id);
@@ -712,8 +921,13 @@ function selectVehicle(id) {
   }
 
   applyTemplate(tmpl);
-  showScreen('checklist');
-  renderChecklist();
+  restoreDraftIfAvailable(function(resumed) {
+    if (resumed) {
+      showReviewSignoff();
+      return;
+    }
+    enterChecklistFlowForTemplate();
+  });
 }
 
 // ── Screen 1: checklist ───────────────────────────────────────────────────────
@@ -759,11 +973,13 @@ function renderChecklist() {
           + '</div>'
           + '<div id="item-photo-grid-' + item.id + '" class="flex flex-wrap gap-2"></div>';
 
+      var existingNote = (responses[item.id] && responses[item.id].note) ? String(responses[item.id].note) : '';
       failExtrasHtml = '<div id="fail-extras-' + item.id + '" class="hidden mt-3 pt-3 border-t border-red-100 space-y-2">'
         + bodworkSides
-        + '<textarea placeholder="Describe the issue…" rows="2"'
+        + '<textarea placeholder="Describe the issue…" rows="2" maxlength="' + RESPONSE_TEXT_MAX_LENGTH + '"'
         + ' class="w-full text-sm text-slate-600 bg-red-50 border border-red-200 focus:border-red-400 rounded-xl px-3 py-2 focus:outline-none resize-none placeholder:text-red-300"'
-        + ' oninput="setNote(\'' + item.id + '\', this.value)"></textarea>'
+        + ' oninput="setNote(\'' + item.id + '\', this.value, this)">' + escHtml(existingNote) + '</textarea>'
+        + '<div class="text-right text-xs text-slate-400"><span id="note-count-' + item.id + '">' + existingNote.length + '</span> / ' + RESPONSE_TEXT_MAX_LENGTH + '</div>'
         + failPhotoHtml
         + '</div>';
     }
@@ -797,7 +1013,7 @@ function renderItemInput(item) {
   if (item.type === 'number') {
     return '<input type="number" inputmode="numeric" placeholder="Enter number…"'
       + ' class="w-full text-lg font-bold text-slate-700 bg-slate-50 border-2 border-slate-100 focus:border-blue-400 rounded-xl px-4 py-3 focus:outline-none"'
-      + ' oninput="setResponse(\'' + item.id + '\', this.value)">';
+      + ' oninput="setNumberResponse(\'' + item.id + '\', this)">';
   }
   if (item.type === 'picture_required') {
     return '<div>'
@@ -808,14 +1024,30 @@ function renderItemInput(item) {
       + '<div id="item-photo-grid-' + item.id + '" class="flex flex-wrap gap-2 mt-2"></div>'
       + '</div>';
   }
-  return '<textarea placeholder="Enter your notes…" rows="3"'
+  var currentValue = (responses[item.id] && responses[item.id].value != null) ? String(responses[item.id].value) : '';
+  return '<textarea placeholder="Enter your notes…" rows="3" maxlength="' + RESPONSE_TEXT_MAX_LENGTH + '"'
     + ' class="w-full text-sm text-slate-700 bg-slate-50 border-2 border-slate-100 focus:border-blue-400 rounded-xl px-4 py-3 focus:outline-none resize-none"'
-    + ' oninput="setResponse(\'' + item.id + '\', this.value)"></textarea>';
+    + ' oninput="setTextResponse(\'' + item.id + '\', this)">' + escHtml(currentValue) + '</textarea>'
+    + '<div class="text-right text-xs text-slate-400 mt-1"><span id="text-count-' + item.id + '">' + currentValue.length + '</span> / ' + RESPONSE_TEXT_MAX_LENGTH + '</div>';
+}
+
+function setTextResponse(id, input) {
+  var value = String(input.value || '');
+  var counter = document.getElementById('text-count-' + id);
+  if (counter) counter.textContent = value.length;
+  setResponse(id, value);
+}
+
+function setNumberResponse(id, input) {
+  var value = String(input.value || '').slice(0, NUMBER_RESPONSE_MAX_LENGTH);
+  if (input.value !== value) input.value = value;
+  setResponse(id, value);
 }
 
 function setResponse(id, value) {
   if (!responses[id]) responses[id] = {};
   responses[id].value = value;
+  invalidateSignoff();
 
   var card       = document.getElementById('card-' + id);
   var item       = CHECKLIST.items.find(function(i) { return i.id === id; });
@@ -843,11 +1075,17 @@ function setResponse(id, value) {
     card.classList.toggle('answered', value.trim().length > 0 && isItemComplete(item));
   }
   updateProgress();
+  scheduleDraftSave();
 }
 
-function setNote(id, note) {
+function setNote(id, note, input) {
+  note = String(note || '');
   if (!responses[id]) responses[id] = {};
   responses[id].note = note;
+  var counter = document.getElementById('note-count-' + id);
+  if (counter) counter.textContent = note.length;
+  invalidateSignoff();
+  scheduleDraftSave();
 }
 
 function toggleSide(itemId, side) {
@@ -859,6 +1097,8 @@ function toggleSide(itemId, side) {
   } else {
     responses[itemId].sides.splice(idx, 1);
   }
+  invalidateSignoff();
+  scheduleDraftSave();
   // Update button style
   var btn = document.getElementById('side-' + itemId + '-' + side);
   if (btn) {
@@ -948,8 +1188,10 @@ function paintTripChoice() {
 
 function setDriverTripChoice(choice) {
   driverTripChoice = choice;
+  invalidateSignoff();
   paintTripChoice();
   updateProgress();
+  scheduleDraftSave();
 }
 
 // ── Screen 1b: Checklist Picker ───────────────────────────────────────────────
@@ -978,15 +1220,561 @@ function selectChecklist(templateId) {
   var tmpl = ALL_TEMPLATES.find(function(t) { return t.id === templateId; });
   if (!tmpl) return;
   applyTemplate(tmpl);
-  showScreen('checklist');
-  renderChecklist();
+  restoreDraftIfAvailable(function(resumed) {
+    if (resumed) {
+      showReviewSignoff();
+      return;
+    }
+    enterChecklistFlowForTemplate();
+  });
 }
 
 function goBackToVehicleSelect() { showScreen('select'); }
 
 // ── Screen 2: photos ──────────────────────────────────────────────────────────
 function showPhotos() { showScreen('photos'); updateSubmitFromSlots(); }
-function goBackToChecklist() { showScreen('checklist'); }
+function goBackToChecklist() {
+  if (!hasChecklistQuestions()) {
+    showScreen('select');
+    return;
+  }
+  showScreen('checklist');
+}
+
+function continueToReviewOrSubmit() {
+  if (CHECKLIST.requireSignoff) {
+    showReviewSignoff();
+    return;
+  }
+  submitChecklist();
+}
+
+function getVehicleLabel() {
+  if (!selectedVehicle) return '';
+  return selectedVehicle.name + (selectedVehicle.plate ? ' · ' + selectedVehicle.plate : '');
+}
+
+function escHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function titleCaseSlot(slot) {
+  if (!slot) return 'Photo';
+  return slot.charAt(0).toUpperCase() + slot.slice(1);
+}
+
+function showReviewSignoff() {
+  var panel = document.getElementById('signaturePanel');
+  if (panel) panel.classList.add('hidden');
+  renderReviewScreen();
+  showScreen('review');
+  scheduleDraftSave();
+}
+
+function renderReviewScreen() {
+  document.getElementById('reviewChecklistName').textContent = CHECKLIST.name || 'Checklist';
+  document.getElementById('reviewVehicleName').textContent = getVehicleLabel();
+  document.getElementById('signeeNameInput').value = SIGNOFF.signeeName || '';
+
+  var noItems = !hasChecklistQuestions();
+  document.getElementById('reviewNoItemsMsg').classList.toggle('hidden', !noItems);
+  document.getElementById('reviewQuestions').classList.toggle('hidden', noItems);
+
+  _reviewPhotos = [];
+
+  if (!noItems) {
+    var qHtml = CHECKLIST.items.map(function(item) {
+      var r = responses[item.id] || {};
+      var value = (r.value === undefined || r.value === null || r.value === '') ? 'Not answered' : String(r.value).toUpperCase();
+      var note = r.note ? '<p style="font-size:12px;color:#64748b;margin:4px 0 0 0;">Note: ' + escHtml(r.note) + '</p>' : '';
+      var sides = (r.sides && r.sides.length)
+        ? '<p style="font-size:12px;color:#64748b;margin:4px 0 0 0;">Sides: ' + escHtml(r.sides.join(', ')) + '</p>'
+        : '';
+      var photoHtml = '';
+      var itemPhotos = (r.itemPhotos || []);
+      if (itemPhotos.length) {
+        photoHtml = '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">'
+          + itemPhotos.map(function(src, idx) {
+              var reviewIdx = _reviewPhotos.length;
+              _reviewPhotos.push({ label: (item.label || 'Checklist item') + ' #' + (idx + 1), src: src });
+              return '<button type="button" onclick="openReviewPhotoModal(' + reviewIdx + ', this)"'
+                + ' style="border:none;background:transparent;padding:0;cursor:pointer;">'
+                + '<img src="' + src + '" alt="Checklist photo" style="width:64px;height:64px;object-fit:cover;border-radius:8px;border:1px solid #cbd5e1;">'
+                + '</button>';
+            }).join('')
+          + '</div>';
+      }
+      return '<div style="border:1px solid #e2e8f0;border-radius:10px;padding:10px;background:#f8fafc;">'
+        + '<p style="font-size:13px;font-weight:700;color:#1e293b;margin:0;">' + escHtml(item.label || 'Checklist item') + '</p>'
+        + '<p style="font-size:12px;color:#334155;margin:4px 0 0 0;">Answer: <strong>' + escHtml(value) + '</strong></p>'
+        + note + sides + photoHtml
+        + '</div>';
+    }).join('');
+    document.getElementById('reviewQuestionsList').innerHTML = qHtml;
+  } else {
+    document.getElementById('reviewQuestionsList').innerHTML = '';
+  }
+
+  var walkWrap = document.getElementById('reviewWalkaround');
+  var walkGrid = document.getElementById('reviewWalkaroundGrid');
+  var hasWalk = PHOTO_SLOTS.some(function(slot) { return !!photos[slot]; });
+  if (CHECKLIST.requirePhotos || hasWalk) {
+    walkWrap.classList.remove('hidden');
+    var order = ['front', 'left', 'right', 'rear'];
+    walkGrid.innerHTML = order.map(function(slot) {
+      var src = photos[slot];
+      if (!src) {
+        return '<div style="border:1px dashed #cbd5e1;border-radius:10px;background:#f8fafc;display:flex;align-items:center;justify-content:center;height:92px;">'
+          + '<span style="font-size:11px;color:#94a3b8;">' + escHtml(titleCaseSlot(slot)) + ' missing</span></div>';
+      }
+      var reviewIdx = _reviewPhotos.length;
+      _reviewPhotos.push({ label: 'Walkaround ' + titleCaseSlot(slot), src: src });
+      return '<button type="button" onclick="openReviewPhotoModal(' + reviewIdx + ', this)"'
+        + ' style="border:none;background:transparent;padding:0;cursor:pointer;">'
+        + '<img src="' + src + '" alt="' + escHtml(slot) + ' photo" style="width:100%;height:92px;object-fit:cover;border-radius:10px;border:1px solid #cbd5e1;">'
+        + '</button>';
+    }).join('');
+  } else {
+    walkWrap.classList.add('hidden');
+    walkGrid.innerHTML = '';
+  }
+
+  var signedLabel = SIGNOFF.signedAtUtc
+    ? ('Captured: ' + formatSignedAt(SIGNOFF.signedAtUtc, SIGNOFF.timezoneOffsetMinutes))
+    : 'Will be captured when signature is confirmed';
+  document.getElementById('reviewSignedAtText').textContent = signedLabel;
+  updateSignoffControls();
+}
+
+function goBackFromReview() {
+  if (CHECKLIST.requirePhotos) {
+    showScreen('photos');
+    return;
+  }
+  if (hasChecklistQuestions()) {
+    showScreen('checklist');
+    return;
+  }
+  showScreen('select');
+}
+
+function editChecklistFromReview() {
+  showScreen('checklist');
+}
+
+function retakePhotosFromReview() {
+  showScreen('photos');
+}
+
+function openReviewPhotoModal(index, trigger) {
+  if (!_reviewPhotos.length) return;
+  _reviewPhotoIndex = Math.max(0, Math.min(index, _reviewPhotos.length - 1));
+  _reviewPhotoLastFocus = trigger || null;
+  renderReviewPhotoModal();
+  var modal = document.getElementById('reviewPhotoModal');
+  modal.classList.remove('hidden');
+  modal.style.display = 'flex';
+}
+
+function closeReviewPhotoModal() {
+  var modal = document.getElementById('reviewPhotoModal');
+  modal.classList.add('hidden');
+  modal.style.display = 'none';
+  if (_reviewPhotoLastFocus && _reviewPhotoLastFocus.focus) _reviewPhotoLastFocus.focus();
+  _reviewPhotoLastFocus = null;
+}
+
+function renderReviewPhotoModal() {
+  var card = _reviewPhotos[_reviewPhotoIndex];
+  if (!card) return;
+  document.getElementById('reviewPhotoModalImg').src = card.src;
+  document.getElementById('reviewPhotoCounter').textContent = (_reviewPhotoIndex + 1) + ' / ' + _reviewPhotos.length;
+}
+
+function prevReviewPhoto() {
+  if (_reviewPhotoIndex > 0) {
+    _reviewPhotoIndex--;
+    renderReviewPhotoModal();
+  }
+}
+
+function nextReviewPhoto() {
+  if (_reviewPhotoIndex < _reviewPhotos.length - 1) {
+    _reviewPhotoIndex++;
+    renderReviewPhotoModal();
+  }
+}
+
+document.addEventListener('keydown', function(e) {
+  var modal = document.getElementById('reviewPhotoModal');
+  if (!modal || modal.classList.contains('hidden')) return;
+  if (e.key === 'Escape') closeReviewPhotoModal();
+  if (e.key === 'ArrowLeft') prevReviewPhoto();
+  if (e.key === 'ArrowRight') nextReviewPhoto();
+});
+
+function initSignaturePad() {
+  if (_signaturePadReady) {
+    resizeSignatureCanvas(true);
+    return;
+  }
+  var canvas = document.getElementById('signoffCanvas');
+  if (!canvas) return;
+  canvas.addEventListener('pointerdown', signaturePointerDown);
+  canvas.addEventListener('pointermove', signaturePointerMove);
+  canvas.addEventListener('pointerup', signaturePointerUp);
+  canvas.addEventListener('pointerleave', signaturePointerUp);
+  canvas.addEventListener('pointercancel', signaturePointerUp);
+  _signaturePadReady = true;
+  resizeSignatureCanvas(true);
+}
+
+function updateSignoffControls() {
+  var prompt = document.getElementById('signoffPrompt');
+  var promptText = document.getElementById('signoffPromptText');
+  var provideBtn = document.getElementById('provideSignatureBtn');
+  var panel = document.getElementById('signaturePanel');
+  var confirmSignatureBtn = document.getElementById('confirmSignatureBtn');
+  var finalBtn = document.getElementById('confirmSubmitBtn');
+  if (!prompt || !promptText || !provideBtn || !panel || !confirmSignatureBtn || !finalBtn) return;
+
+  var panelOpen = !panel.classList.contains('hidden');
+  prompt.classList.toggle('hidden', panelOpen);
+  promptText.textContent = SIGNOFF.confirmed
+    ? 'Signature confirmed. You can now submit this checklist.'
+    : 'A signature is required before this checklist can be submitted.';
+  provideBtn.textContent = SIGNOFF.confirmed ? 'Edit Signature' : 'Provide Signature';
+
+  var canConfirmSignature = !!SIGNOFF.signeeName && !!SIGNOFF.hasStroke;
+  confirmSignatureBtn.disabled = !canConfirmSignature;
+  confirmSignatureBtn.style.opacity = canConfirmSignature ? '1' : '0.4';
+  confirmSignatureBtn.style.cursor = canConfirmSignature ? 'pointer' : 'not-allowed';
+
+  finalBtn.disabled = !SIGNOFF.confirmed;
+  finalBtn.style.opacity = SIGNOFF.confirmed ? '1' : '0.4';
+  finalBtn.style.cursor = SIGNOFF.confirmed ? 'pointer' : 'not-allowed';
+}
+
+function openSignaturePanel() {
+  var panel = document.getElementById('signaturePanel');
+  if (!panel) return;
+  if (SIGNOFF.confirmed) {
+    SIGNOFF.confirmed = false;
+    SIGNOFF.signedAtUtc = '';
+    SIGNOFF.localDate = '';
+    SIGNOFF.timezoneOffsetMinutes = null;
+    SIGNOFF.cardDataUrl = '';
+    SIGNOFF.cardMediaFileId = '';
+    SIGNOFF.cardDriveFileId = '';
+    SIGNOFF.archiveStatus = 'pending';
+  }
+  panel.classList.remove('hidden');
+  initSignaturePad();
+  updateSignoffControls();
+  var input = document.getElementById('signeeNameInput');
+  if (input) input.focus();
+}
+
+function closeSignaturePanel() {
+  var panel = document.getElementById('signaturePanel');
+  if (panel) panel.classList.add('hidden');
+  updateSignoffControls();
+}
+
+function resizeSignatureCanvas(keepImage) {
+  var canvas = document.getElementById('signoffCanvas');
+  if (!canvas) return;
+  var existing = keepImage ? (SIGNOFF.signatureDataUrl || canvas.toDataURL('image/png')) : '';
+  var ratio = window.devicePixelRatio || 1;
+  var rect = canvas.getBoundingClientRect();
+  canvas.width = Math.max(1, Math.floor(rect.width * ratio));
+  canvas.height = Math.max(1, Math.floor(rect.height * ratio));
+  var ctx = canvas.getContext('2d');
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, rect.width, rect.height);
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = '#0f172a';
+  ctx.lineWidth = 2.2;
+  if (existing && existing.length > 32) {
+    var img = new Image();
+    img.onload = function() {
+      ctx.drawImage(img, 0, 0, rect.width, rect.height);
+    };
+    img.src = existing;
+  }
+}
+
+function signaturePointerDown(e) {
+  var canvas = document.getElementById('signoffCanvas');
+  if (!canvas) return;
+  _signatureDrawing = true;
+  _signatureLast = signaturePointForEvent(canvas, e);
+  if (canvas.setPointerCapture) {
+    try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+  }
+  e.preventDefault();
+}
+
+function signaturePointerMove(e) {
+  if (!_signatureDrawing) return;
+  var canvas = document.getElementById('signoffCanvas');
+  if (!canvas) return;
+  var point = signaturePointForEvent(canvas, e);
+  var ctx = canvas.getContext('2d');
+  ctx.beginPath();
+  ctx.moveTo(_signatureLast.x, _signatureLast.y);
+  ctx.lineTo(point.x, point.y);
+  ctx.stroke();
+  if (Math.abs(point.x - _signatureLast.x) > 0.4 || Math.abs(point.y - _signatureLast.y) > 0.4) {
+    SIGNOFF.hasStroke = true;
+    SIGNOFF.confirmed = false;
+    SIGNOFF.signedAtUtc = '';
+    SIGNOFF.cardDataUrl = '';
+  }
+  _signatureLast = point;
+  SIGNOFF.signatureDataUrl = canvas.toDataURL('image/png');
+  updateSignoffControls();
+  scheduleDraftSave();
+  e.preventDefault();
+}
+
+function signaturePointerUp(e) {
+  _signatureDrawing = false;
+  _signatureLast = null;
+  var canvas = document.getElementById('signoffCanvas');
+  if (canvas) SIGNOFF.signatureDataUrl = canvas.toDataURL('image/png');
+  updateSignoffControls();
+  scheduleDraftSave();
+  if (e) e.preventDefault();
+}
+
+function signaturePointForEvent(canvas, e) {
+  var rect = canvas.getBoundingClientRect();
+  var maxX = Math.max(SIGNATURE_DRAW_PADDING, rect.width - SIGNATURE_DRAW_PADDING);
+  var maxY = Math.max(SIGNATURE_DRAW_PADDING, rect.height - SIGNATURE_DRAW_PADDING);
+  return {
+    x: Math.max(SIGNATURE_DRAW_PADDING, Math.min(maxX, e.clientX - rect.left)),
+    y: Math.max(SIGNATURE_DRAW_PADDING, Math.min(maxY, e.clientY - rect.top))
+  };
+}
+
+function clearSignatureCanvas() {
+  var canvas = document.getElementById('signoffCanvas');
+  if (canvas) {
+    var ctx = canvas.getContext('2d');
+    var rect = canvas.getBoundingClientRect();
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, rect.width, rect.height);
+  }
+  SIGNOFF.hasStroke = false;
+  SIGNOFF.signatureDataUrl = '';
+  SIGNOFF.signedAtUtc = '';
+  SIGNOFF.localDate = '';
+  SIGNOFF.timezoneOffsetMinutes = null;
+  SIGNOFF.cardDataUrl = '';
+  SIGNOFF.cardMediaFileId = '';
+  SIGNOFF.cardDriveFileId = '';
+  SIGNOFF.archiveStatus = 'pending';
+  SIGNOFF.confirmed = false;
+  document.getElementById('reviewSignedAtText').textContent = 'Will be captured when signature is confirmed';
+  updateSignoffControls();
+  scheduleDraftSave();
+}
+
+function onSigneeNameInput(value) {
+  SIGNOFF.signeeName = String(value || '').trim();
+  SIGNOFF.signedAtUtc = '';
+  SIGNOFF.localDate = '';
+  SIGNOFF.timezoneOffsetMinutes = null;
+  SIGNOFF.cardDataUrl = '';
+  SIGNOFF.cardMediaFileId = '';
+  SIGNOFF.cardDriveFileId = '';
+  SIGNOFF.archiveStatus = 'pending';
+  SIGNOFF.confirmed = false;
+  updateSignoffControls();
+  scheduleDraftSave();
+}
+
+function invalidateSignoff() {
+  if (!CHECKLIST.requireSignoff) return;
+  if (!SIGNOFF.hasStroke && !SIGNOFF.signatureDataUrl && !SIGNOFF.signedAtUtc) return;
+  clearSignatureCanvas();
+}
+
+function prepareConfirmSubmit() {
+  if (!SIGNOFF.confirmed) {
+    openSignaturePanel();
+    return;
+  }
+
+  var signee = (document.getElementById('signeeNameInput').value || '').trim();
+  if (!signee) {
+    alert('Enter the signee name before confirming submission.');
+    return;
+  }
+  if (!SIGNOFF.hasStroke) {
+    alert('A signature is required before confirming submission.');
+    return;
+  }
+
+  var modal = document.getElementById('confirmSubmitModal');
+  modal.classList.remove('hidden');
+  modal.style.display = 'flex';
+}
+
+function confirmSignature() {
+  var signee = (document.getElementById('signeeNameInput').value || '').trim();
+  if (!signee) {
+    alert('Enter the signee name before confirming the signature.');
+    return;
+  }
+  if (!SIGNOFF.hasStroke) {
+    alert('Draw a signature before confirming it.');
+    return;
+  }
+
+  var signedAt = new Date();
+  SIGNOFF.signeeName = signee;
+  SIGNOFF.signedAtUtc = signedAt.toISOString();
+  SIGNOFF.localDate = SIGNOFF.signedAtUtc.slice(0, 10);
+  SIGNOFF.timezoneOffsetMinutes = signedAt.getTimezoneOffset();
+  SIGNOFF.signatureDataUrl = document.getElementById('signoffCanvas').toDataURL('image/png');
+  SIGNOFF.cardDataUrl = buildSignoffCardDataUrl();
+  SIGNOFF.cardMediaFileId = '';
+  SIGNOFF.cardDriveFileId = '';
+  SIGNOFF.archiveStatus = 'pending';
+  SIGNOFF.confirmed = true;
+
+  document.getElementById('reviewSignedAtText').textContent = 'Captured: ' + formatSignedAt(SIGNOFF.signedAtUtc, SIGNOFF.timezoneOffsetMinutes);
+  closeSignaturePanel();
+  updateSignoffControls();
+  scheduleDraftSave();
+}
+
+function closeConfirmSubmitModal() {
+  var modal = document.getElementById('confirmSubmitModal');
+  modal.classList.add('hidden');
+  modal.style.display = 'none';
+}
+
+function confirmSubmitAfterReview() {
+  closeConfirmSubmitModal();
+  submitChecklist();
+}
+
+function formatSignedAt(iso, tzOffsetMinutes) {
+  if (!iso) return 'Will be captured when signature is confirmed';
+  var dt = new Date(iso);
+  var local = dt.toLocaleString('en-GB', {
+    day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit'
+  });
+  var offset = typeof tzOffsetMinutes === 'number' ? -tzOffsetMinutes : -dt.getTimezoneOffset();
+  var sign = offset >= 0 ? '+' : '-';
+  var abs = Math.abs(offset);
+  var hh = String(Math.floor(abs / 60)).padStart(2, '0');
+  var mm = String(abs % 60).padStart(2, '0');
+  return local + ' (UTC' + sign + hh + ':' + mm + ')';
+}
+
+function buildSignoffCardDataUrl() {
+  var canvas = document.createElement('canvas');
+  canvas.width = 1400;
+  canvas.height = 800;
+  var ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = '#f8fbff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(32, 32, 1336, 736);
+  ctx.strokeStyle = '#0047BB';
+  ctx.lineWidth = 6;
+  ctx.strokeRect(32, 32, 1336, 736);
+
+  ctx.fillStyle = '#0047BB';
+  ctx.font = 'bold 52px Segoe UI';
+  ctx.fillText('Operational sign-off', 80, 120);
+
+  ctx.fillStyle = '#0f172a';
+  ctx.font = '600 32px Segoe UI';
+  ctx.fillText('Checklist: ' + (CHECKLIST.name || 'Checklist'), 80, 190);
+  ctx.fillText('Vehicle: ' + getVehicleLabel(), 80, 240);
+  ctx.fillText('Signed by: ' + (SIGNOFF.signeeName || ''), 80, 290);
+  ctx.fillText('Signed on: ' + formatSignedAt(SIGNOFF.signedAtUtc, SIGNOFF.timezoneOffsetMinutes), 80, 340);
+
+  ctx.strokeStyle = '#94a3b8';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(100, 620);
+  ctx.lineTo(1280, 620);
+  ctx.stroke();
+
+  var sigCanvas = document.getElementById('signoffCanvas');
+  if (sigCanvas) {
+    try {
+      var sigCtx = sigCanvas.getContext('2d');
+      var sigWidth = sigCanvas.width;
+      var sigHeight = sigCanvas.height;
+      var sigPixels = sigCtx.getImageData(0, 0, sigWidth, sigHeight).data;
+      var minX = sigWidth, minY = sigHeight, maxX = -1, maxY = -1;
+      for (var py = 0; py < sigHeight; py++) {
+        for (var px = 0; px < sigWidth; px++) {
+          var pixel = (py * sigWidth + px) * 4;
+          if (sigPixels[pixel + 3] > 0
+              && (sigPixels[pixel] < 245 || sigPixels[pixel + 1] < 245 || sigPixels[pixel + 2] < 245)) {
+            minX = Math.min(minX, px);
+            minY = Math.min(minY, py);
+            maxX = Math.max(maxX, px);
+            maxY = Math.max(maxY, py);
+          }
+        }
+      }
+
+      if (maxX >= minX && maxY >= minY) {
+        var sourcePad = Math.max(8, Math.round(Math.min(sigWidth, sigHeight) * 0.04));
+        minX = Math.max(0, minX - sourcePad);
+        minY = Math.max(0, minY - sourcePad);
+        maxX = Math.min(sigWidth - 1, maxX + sourcePad);
+        maxY = Math.min(sigHeight - 1, maxY + sourcePad);
+
+        var sourceWidth = maxX - minX + 1;
+        var sourceHeight = maxY - minY + 1;
+        var targetX = 100;
+        var targetY = 390;
+        var targetWidth = 1180;
+        var targetHeight = 210;
+        var scale = Math.min(targetWidth / sourceWidth, targetHeight / sourceHeight);
+        var drawWidth = sourceWidth * scale;
+        var drawHeight = sourceHeight * scale;
+        var drawX = targetX + (targetWidth - drawWidth) / 2;
+        var drawY = targetY + (targetHeight - drawHeight) / 2;
+        ctx.drawImage(sigCanvas, minX, minY, sourceWidth, sourceHeight,
+          drawX, drawY, drawWidth, drawHeight);
+      }
+    } catch (e) {}
+  }
+
+  ctx.fillStyle = '#475569';
+  ctx.font = '26px Segoe UI';
+  ctx.fillText('Signature', 100, 655);
+
+  ctx.font = '22px Segoe UI';
+  ctx.fillStyle = '#334155';
+  ctx.fillText(SIGNOFF.acknowledgementText, 80, 720, 1240);
+
+  var ref = _activeSubmissionId || ('resp-' + Date.now());
+  ctx.fillStyle = '#64748b';
+  ctx.font = '20px Segoe UI';
+  ctx.fillText('Submission reference: ' + ref, 80, 760);
+
+  return canvas.toDataURL('image/jpeg', 0.92);
+}
 
 function handlePhotos(input) {
   Array.from(input.files).forEach(function(file) {
@@ -1043,6 +1831,8 @@ function handleItemPhoto(id, input) {
 // photo is 2-6 MB and localStorage tops out around 5-10 MB in total.
 var PQ_DB_NAME    = 'vehicle-checkin';
 var PQ_STORE      = 'pendingPhotos';
+var DRAFT_STORE   = 'submissionDrafts';
+var RESPONSE_BATCH_STORE = 'responseBatches';
 var PQ_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;  // 14 days
 var PQ_MAX_BYTES  = 300 * 1024 * 1024;         // 300 MB
 var _pqDb         = null;
@@ -1053,20 +1843,45 @@ function pqOpen(onDone, onFail) {
   if (_pqDb) { onDone(_pqDb); return; }
   try {
     if (!window.indexedDB) { _pqUnavailable = true; if (onFail) onFail('No IndexedDB'); return; }
-    var req = window.indexedDB.open(PQ_DB_NAME, 1);
+    var req = window.indexedDB.open(PQ_DB_NAME, 3);
+    var openSettled = false;
     req.onupgradeneeded = function() {
       var db = req.result;
       if (!db.objectStoreNames.contains(PQ_STORE)) {
         db.createObjectStore(PQ_STORE, { keyPath: 'key', autoIncrement: true });
       }
+      if (!db.objectStoreNames.contains(DRAFT_STORE)) {
+        db.createObjectStore(DRAFT_STORE, { keyPath: 'draftKey' });
+      }
+      if (!db.objectStoreNames.contains(RESPONSE_BATCH_STORE)) {
+        db.createObjectStore(RESPONSE_BATCH_STORE, { keyPath: 'batchKey' });
+      }
     };
-    req.onsuccess = function() { _pqDb = req.result; onDone(_pqDb); };
+    req.onsuccess = function() {
+      if (openSettled) { req.result.close(); return; }
+      openSettled = true;
+      _pqDb = req.result;
+      _pqDb.onversionchange = function() {
+        _pqDb.close();
+        _pqDb = null;
+      };
+      onDone(_pqDb);
+    };
     req.onerror   = function() {
+      if (openSettled) return;
+      openSettled = true;
       // Private browsing and some WebView configurations refuse to open a
-      // database. Fall back to today's behaviour rather than breaking submit.
+      // database. Fail closed rather than start a submission we cannot recover.
       _pqUnavailable = true;
       console.warn('[Queue] IndexedDB unavailable:', req.error);
       if (onFail) onFail(req.error);
+    };
+    req.onblocked = function() {
+      if (openSettled) return;
+      openSettled = true;
+      _pqUnavailable = true;
+      console.warn('[Queue] IndexedDB upgrade blocked by another open page');
+      if (onFail) onFail('Close other Vehicle Check-In pages and reload');
     };
   } catch (e) {
     _pqUnavailable = true;
@@ -1075,15 +1890,21 @@ function pqOpen(onDone, onFail) {
   }
 }
 
-function pqTx(mode, onStore, onFail) {
+function dbTx(storeName, mode, onStore, onFail) {
   pqOpen(function(db) {
     try {
-      var tx = db.transaction(PQ_STORE, mode);
-      onStore(tx.objectStore(PQ_STORE), tx);
+      var tx = db.transaction(storeName, mode);
+      onStore(tx.objectStore(storeName), tx);
     } catch (e) {
       console.warn('[Queue] transaction failed:', e);
       if (onFail) onFail(e);
     }
+  }, onFail);
+}
+
+function pqTx(mode, onStore, onFail) {
+  dbTx(PQ_STORE, mode, function(store, tx) {
+    onStore(store, tx);
   }, onFail);
 }
 
@@ -1191,6 +2012,224 @@ function pqCount(onDone) {
   pqAllCurrent(function(list) { onDone(list.length); });
 }
 
+function currentDraftKey() {
+  var databaseKey = pqDatabaseKey();
+  if (!databaseKey || !DRIVER.id || !CHECKLIST.id || !selectedVehicle || !selectedVehicle.id) return '';
+  return [databaseKey, DRIVER.id, CHECKLIST.id, selectedVehicle.id].join('|');
+}
+
+function draftGet(draftKey, onDone) {
+  if (!draftKey) { onDone(null); return; }
+  dbTx(DRAFT_STORE, 'readonly', function(store) {
+    var req = store.get(draftKey);
+    req.onsuccess = function() { onDone(req.result || null); };
+    req.onerror = function() { onDone(null); };
+  }, function() { onDone(null); });
+}
+
+function draftPut(record, onDone) {
+  dbTx(DRAFT_STORE, 'readwrite', function(store) {
+    var req = store.put(record);
+    req.onsuccess = function() { if (onDone) onDone(true); };
+    req.onerror = function() { if (onDone) onDone(false); };
+  }, function() { if (onDone) onDone(false); });
+}
+
+function draftDelete(draftKey, onDone) {
+  if (!draftKey) { if (onDone) onDone(false); return; }
+  dbTx(DRAFT_STORE, 'readwrite', function(store) {
+    var req = store.delete(draftKey);
+    req.onsuccess = function() { if (onDone) onDone(true); };
+    req.onerror = function() { if (onDone) onDone(false); };
+  }, function() { if (onDone) onDone(false); });
+}
+
+function responseBatchKey(submissionId) {
+  var databaseKey = pqDatabaseKey();
+  return databaseKey && submissionId ? databaseKey + '|' + submissionId : '';
+}
+
+function responseBatchPut(record, onDone) {
+  dbTx(RESPONSE_BATCH_STORE, 'readwrite', function(store) {
+    var req = store.put(record);
+    req.onsuccess = function() { if (onDone) onDone(true); };
+    req.onerror = function() { if (onDone) onDone(false); };
+  }, function() { if (onDone) onDone(false); });
+}
+
+function responseBatchAcquire(batchKey, onDone) {
+  dbTx(RESPONSE_BATCH_STORE, 'readwrite', function(store) {
+    var getReq = store.get(batchKey);
+    getReq.onsuccess = function() {
+      var record = getReq.result;
+      if (!record) { onDone(false, ''); return; }
+      if (record.leaseOwner && record.leaseUntil > Date.now()) {
+        onDone(false, record.leaseOwner);
+        return;
+      }
+      record.leaseOwner = _responseWorkerId;
+      record.leaseUntil = Date.now() + (30 * 60 * 1000);
+      var putReq = store.put(record);
+      putReq.onsuccess = function() { onDone(true); };
+      putReq.onerror = function() { onDone(false); };
+    };
+    getReq.onerror = function() { onDone(false); };
+  }, function() { onDone(false); });
+}
+
+function responseBatchRelease(batchKey, onDone) {
+  dbTx(RESPONSE_BATCH_STORE, 'readwrite', function(store) {
+    var getReq = store.get(batchKey);
+    getReq.onsuccess = function() {
+      var record = getReq.result;
+      if (!record || record.leaseOwner !== _responseWorkerId) { if (onDone) onDone(); return; }
+      record.leaseOwner = '';
+      record.leaseUntil = 0;
+      var putReq = store.put(record);
+      putReq.onsuccess = function() { if (onDone) onDone(); };
+      putReq.onerror = function() { if (onDone) onDone(); };
+    };
+    getReq.onerror = function() { if (onDone) onDone(); };
+  }, function() { if (onDone) onDone(); });
+}
+
+function responseBatchDelete(batchKey, onDone) {
+  if (!batchKey) { if (onDone) onDone(false); return; }
+  dbTx(RESPONSE_BATCH_STORE, 'readwrite', function(store) {
+    var req = store.delete(batchKey);
+    req.onsuccess = function() { if (onDone) onDone(true); };
+    req.onerror = function() { if (onDone) onDone(false); };
+  }, function() { if (onDone) onDone(false); });
+}
+
+function responseBatchesCurrent(onDone) {
+  var databaseKey = pqDatabaseKey();
+  if (!databaseKey) { onDone([]); return; }
+  dbTx(RESPONSE_BATCH_STORE, 'readonly', function(store) {
+    var req = store.getAll();
+    req.onsuccess = function() {
+      onDone((req.result || []).filter(function(record) { return record.databaseKey === databaseKey; }));
+    };
+    req.onerror = function() { onDone([]); };
+  }, function() { onDone([]); });
+}
+
+function resumePendingResponseBatches(onDone) {
+  if (_responseBatchRecoveryRunning) { if (onDone) onDone(0); return; }
+  _responseBatchRecoveryRunning = true;
+  responseBatchesCurrent(function(batches) {
+    var index = 0;
+    var recovered = 0;
+    var retryBlocked = false;
+    function next() {
+      if (index >= batches.length) {
+        _responseBatchRecoveryRunning = false;
+        if (onDone) onDone(recovered);
+        if (retryBlocked) setTimeout(function() { resumePendingResponseBatches(function() {}); }, 5000);
+        return;
+      }
+      var batch = batches[index++];
+      _activeResponseBatch = batch;
+      deliverStoredResponse(batch, function(rootId) {
+        ensureResponseSideEffects(batch.plan.response, rootId, batch.queuedPhotos || [], function(sideEffectsReady) {
+          if (!sideEffectsReady) {
+            console.warn('[Response storage] Batch committed but finalisation remains pending: ' + batch.submissionId);
+            responseBatchRelease(batch.batchKey, next);
+            return;
+          }
+          draftDelete(batch.draftKey, function() {
+            responseBatchDelete(batch.batchKey, function() {
+              if (_activeResponseBatch && _activeResponseBatch.batchKey === batch.batchKey) _activeResponseBatch = null;
+              recovered++;
+              next();
+            });
+          });
+        });
+      }, function(err) {
+        console.warn('[Response storage] Batch remains pending:', err);
+        if (/already sending/i.test(String(err))) {
+          if (_activeResponseBatch && _activeResponseBatch.batchKey === batch.batchKey) _activeResponseBatch = null;
+          retryBlocked = true;
+        }
+        next();
+      });
+    }
+    next();
+  });
+}
+
+function buildDraftPayload() {
+  return {
+    submissionId: _activeSubmissionId || '',
+    responses: JSON.parse(JSON.stringify(responses || {})),
+    photos: JSON.parse(JSON.stringify(photos || {})),
+    signoff: JSON.parse(JSON.stringify(SIGNOFF || {})),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function persistDraftNow() {
+  if (!CHECKLIST.requireSignoff) return;
+  var draftKey = currentDraftKey();
+  if (!draftKey) return;
+  var record = {
+    draftKey: draftKey,
+    databaseKey: pqDatabaseKey(),
+    driverId: DRIVER.id,
+    checklistId: CHECKLIST.id,
+    vehicleId: selectedVehicle ? selectedVehicle.id : '',
+    updatedAt: Date.now(),
+    payload: buildDraftPayload()
+  };
+  draftPut(record);
+}
+
+function scheduleDraftSave() {
+  if (!CHECKLIST.requireSignoff) return;
+  if (_draftSaveTimer) clearTimeout(_draftSaveTimer);
+  _draftSaveTimer = setTimeout(function() {
+    _draftSaveTimer = null;
+    persistDraftNow();
+  }, 300);
+}
+
+function clearCurrentDraft() {
+  if (_draftSaveTimer) {
+    clearTimeout(_draftSaveTimer);
+    _draftSaveTimer = null;
+  }
+  draftDelete(currentDraftKey());
+}
+
+function restoreDraftIfAvailable(onDone) {
+  if (!CHECKLIST.requireSignoff) { if (onDone) onDone(false); return; }
+  var draftKey = currentDraftKey();
+  if (!draftKey) { if (onDone) onDone(false); return; }
+  draftGet(draftKey, function(record) {
+    if (!record || !record.payload) { if (onDone) onDone(false); return; }
+    var ok = confirm('A saved draft exists for this checklist and vehicle. Resume it?');
+    if (!ok) { if (onDone) onDone(false); return; }
+    applyDraftPayload(record.payload);
+    if (onDone) onDone(true);
+  });
+}
+
+function applyDraftPayload(payload) {
+  _activeSubmissionId = payload.submissionId || '';
+  responses = payload.responses || {};
+  photos = payload.photos || {};
+  if (payload.signoff) {
+    SIGNOFF = Object.assign({}, SIGNOFF, payload.signoff);
+  }
+  if (hasChecklistQuestions()) {
+    renderChecklist();
+  }
+  PHOTO_SLOTS.forEach(function(slot) {
+    if (photos[slot]) renderDirectionalSlot(slot, photos[slot]);
+  });
+  updateSubmitFromSlots();
+}
+
 // Age and size sweep. Anything dropped is named in the console — a queue that
 // silently discards photos is the exact failure this queue exists to remove.
 function pqPrune(onDone) {
@@ -1260,35 +2299,51 @@ function pqFlushToStore(rec, addInDataId, issueIdsByItem, onDone) {
   var remaining   = batch.length;
   var stored      = 0;
 
-  batch.forEach(function(p) {
-    var blob;
-    try { blob = dataUrlToBlob(p.dataUrl); }
-    catch (e) {
-      console.warn('[Queue] could not convert ' + p.fileName + ':', e);
-      if (--remaining === 0 && onDone) onDone(stored);
-      return;
-    }
-    var manifestEntry = (rec.photoManifest || []).find(function(entry) { return entry.key === p.manifestKey; });
-    pqAdd({
-      submissionId:     rec.id,
-      databaseKey:      databaseKey,
-      addInDataId:      addInDataId || null,
-      issueAddInDataId: (p.itemId && issueIdsByItem) ? (issueIdsByItem[p.itemId] || null) : null,
-      kind:             p.kind,
-      itemId:           p.itemId,
-      photoIdx:         p.photoIdx,
-      manifestKey:      p.manifestKey,
-      mediaStored:      !!(manifestEntry && manifestEntry.mediaFileId),
-      fileName:         p.fileName,
-      blob:             blob,
-      dateStr:          dateStr,
-      vehicleName:      vehicleName,
-      queuedAt:         Date.now(),
-      attempts:         0,
-      lastError:        ''
-    }, function(key) {
-      if (key !== null) stored++;
-      if (--remaining === 0 && onDone) onDone(stored);
+  function settled(saved) {
+    if (saved) stored++;
+    if (--remaining === 0 && onDone) onDone(stored);
+  }
+
+  pqAllCurrent(function(existingEntries) {
+    batch.forEach(function(p) {
+      var existing = existingEntries.find(function(entry) {
+        return entry.submissionId === rec.id && entry.manifestKey === p.manifestKey;
+      });
+      if (existing) {
+        existing.addInDataId = addInDataId || existing.addInDataId || null;
+        existing.issueAddInDataId = (p.itemId && issueIdsByItem)
+          ? (issueIdsByItem[p.itemId] || existing.issueAddInDataId || null)
+          : (existing.issueAddInDataId || null);
+        pqUpdate(existing, settled);
+        return;
+      }
+
+      var blob;
+      try { blob = dataUrlToBlob(p.dataUrl); }
+      catch (e) {
+        console.warn('[Queue] could not convert ' + p.fileName + ':', e);
+        settled(false);
+        return;
+      }
+      var manifestEntry = (rec.photoManifest || []).find(function(entry) { return entry.key === p.manifestKey; });
+      pqAdd({
+        submissionId:     rec.id,
+        databaseKey:      databaseKey,
+        addInDataId:      addInDataId || null,
+        issueAddInDataId: (p.itemId && issueIdsByItem) ? (issueIdsByItem[p.itemId] || null) : null,
+        kind:             p.kind,
+        itemId:           p.itemId,
+        photoIdx:         p.photoIdx,
+        manifestKey:      p.manifestKey,
+        mediaStored:      !!(manifestEntry && manifestEntry.mediaFileId),
+        fileName:         p.fileName,
+        blob:             blob,
+        dateStr:          dateStr,
+        vehicleName:      vehicleName,
+        queuedAt:         Date.now(),
+        attempts:         0,
+        lastError:        ''
+      }, function(key) { settled(key !== null); });
     });
   });
 }
@@ -1681,8 +2736,11 @@ function patchRecords(entries, newWalkaround, newItemIds, newManifestIds, expect
     var manifest = details.photoManifest || [];
     Object.keys(newManifestIds || {}).forEach(function(key) {
       var entry = manifest.find(function(item) { return item.key === key; });
-      if (entry && entry.gdFileId !== newManifestIds[key]) {
+      if (entry && (entry.gdFileId !== newManifestIds[key] || entry.state !== 'ready' || entry.error)) {
         entry.gdFileId = newManifestIds[key];
+        entry.state = 'ready';
+        entry.status = 'DriveReady';
+        entry.error = '';
         changed = true;
       }
     });
@@ -1697,6 +2755,17 @@ function patchRecords(entries, newWalkaround, newItemIds, newManifestIds, expect
         details.driveArchiveStatus = archiveStatus;
         changed = true;
       }
+      var stored = manifest.filter(function(entry) {
+        return entry.state === 'ready' && !!(entry.mediaFileId || entry.gdFileId);
+      }).length;
+      var pending = manifest.filter(function(entry) { return entry.state === 'pending'; }).length;
+      var failed = manifest.filter(function(entry) { return entry.state === 'failed'; }).length;
+      if (details.storedPhotoCount !== stored) { details.storedPhotoCount = stored; changed = true; }
+      if (details.photoPendingCount !== pending) { details.photoPendingCount = pending; changed = true; }
+      if (details.photoFailedCount !== failed) { details.photoFailedCount = failed; changed = true; }
+      var uploadStatus = stored >= (details.capturedPhotoCount || manifest.length)
+        ? 'complete' : (stored === 0 ? 'failed' : 'partial');
+      if (details.photoUploadStatus !== uploadStatus) { details.photoUploadStatus = uploadStatus; changed = true; }
     }
     return changed;
   }, expectedDatabaseKey, function(responsePatched) {
@@ -2117,13 +3186,23 @@ function setSubmitLocked(locked) {
   });
 }
 
+function responseStorageSizingProjection(rec) {
+  var probe = JSON.parse(JSON.stringify(rec));
+  if (probe.driveArchiveRequired) {
+    (probe.photoManifest || []).forEach(function(entry) {
+      if (!entry.gdFileId) entry.gdFileId = 'x'.repeat(80);
+    });
+  }
+  return probe;
+}
+
 function responseMetadataFitsBeforeUpload(rec, walkaroundPhotos, itemPhotoList) {
   var probe = JSON.parse(JSON.stringify(rec));
   (probe.items || []).forEach(function(item) {
     item.itemPhotos = [];
     item.gdItemPhotoIds = [];
   });
-  probe.gdFileIds = [];
+  probe.gdFileIds = useDriveArchive() ? (walkaroundPhotos || []).map(function() { return 'x'.repeat(80); }) : [];
   probe.mediaFileIds = [];
   probe.photoManifest = [];
   (walkaroundPhotos || []).forEach(function(entry) {
@@ -2151,11 +3230,32 @@ function responseMetadataFitsBeforeUpload(rec, walkaroundPhotos, itemPhotoList) 
       error: ''
     });
   });
-  return JSON.stringify(probe).length <= 9500;
+  try {
+    ChecklistResponseStorage.buildPlan(probe);
+    return true;
+  } catch (err) {
+    console.warn('[Response storage] Preflight failed:', err);
+    return false;
+  }
 }
 
 // ── Submit ────────────────────────────────────────────────────────────────────
 function submitChecklist() {
+  if (_activeResponseBatch) {
+    alert('A previous checklist submission is still queued. Keep this page open or reconnect so it can finish safely.');
+    return;
+  }
+  if (CHECKLIST.requireSignoff) {
+    if (!SIGNOFF.confirmed || !SIGNOFF.signeeName || !SIGNOFF.hasStroke) {
+      alert('Provide and confirm the signature before submitting.');
+      showReviewSignoff();
+      return;
+    }
+    if (!SIGNOFF.cardDataUrl) {
+      SIGNOFF.cardDataUrl = buildSignoffCardDataUrl();
+    }
+  }
+
   // Never let staging entries from an interrupted in-page submit bleed into the
   // next logical submission. Persisted IndexedDB entries are unaffected.
   _toQueue = [];
@@ -2172,13 +3272,17 @@ function submitChecklist() {
   if (failedItems.length > 0) {
     document.getElementById('failSummary').classList.remove('hidden');
     document.getElementById('failList').innerHTML = failedItems.map(function(i) { return '<li>' + i.label + '</li>'; }).join('');
+  } else {
+    document.getElementById('failSummary').classList.add('hidden');
+    document.getElementById('failList').innerHTML = '';
   }
 
-  var submissionId = 'resp-' + Date.now();
+  var submissionId = _activeSubmissionId || ('resp-' + Date.now());
+  _activeSubmissionId = submissionId;
   var responseRecord = {
     type:          'ChecklistResponse',
     id:            submissionId,
-    clientBuild:   'v20.6',
+    clientBuild:   'v20.10',
     templateId:    CHECKLIST.id,
     templateName:  CHECKLIST.name,
     tripType:      (CHECKLIST.tripType && CHECKLIST.tripType !== 'any') ? CHECKLIST.tripType : (driverTripChoice || 'any'),
@@ -2201,6 +3305,18 @@ function submitChecklist() {
     driveArchiveStatus: 'pending',
     driveArchivedPhotoCount: 0,
     mediaFileIds:  [],
+    signoff: CHECKLIST.requireSignoff ? {
+      version: 1,
+      signeeName: SIGNOFF.signeeName || '',
+      signedAtUtc: SIGNOFF.signedAtUtc || new Date().toISOString(),
+      localDate: SIGNOFF.localDate || new Date().toISOString().slice(0, 10),
+      timezoneOffsetMinutes: (typeof SIGNOFF.timezoneOffsetMinutes === 'number') ? SIGNOFF.timezoneOffsetMinutes : new Date().getTimezoneOffset(),
+      acknowledgementVersion: 1,
+      acknowledgementText: SIGNOFF.acknowledgementText,
+      cardMediaFileId: SIGNOFF.cardMediaFileId || '',
+      cardDriveFileId: SIGNOFF.cardDriveFileId || '',
+      archiveStatus: SIGNOFF.archiveStatus || 'pending'
+    } : null,
     items:         CHECKLIST.items.map(function(i) {
       return {
         id:         i.id,
@@ -2216,6 +3332,8 @@ function submitChecklist() {
       };
     })
   };
+
+  persistDraftNow();
 
   _photoErrors = [];
   _archiveErrors = [];
@@ -2239,7 +3357,7 @@ function submitChecklist() {
   responseRecord.capturedPhotoCount = walkaroundPhotos.length + itemPhotoList.length;
   if (!responseMetadataFitsBeforeUpload(responseRecord, walkaroundPhotos, itemPhotoList)) {
     setSubmitLocked(false);
-    alert('The checklist metadata is too large to save safely. Shorten long notes and try again.');
+    alert('One checklist field is too large to save safely. Shorten the longest response and try again.');
     return;
   }
 
@@ -2257,60 +3375,82 @@ function submitChecklist() {
   dispatchUpload();
 
   function dispatchUpload() {
-  if (useDemoMediaStorage()) {
-    uploadPhotosToMediaFileMode(responseRecord, walkaroundPhotos, itemPhotoList, function() {
-      if (useDriveArchive() && GD_CONFIG && GD_CONFIG.refreshToken) {
-        _driveArchivePass = true;
-        upRender('Finalising secure photo storage…');
-        uploadPhotosToGoogleDrive(responseRecord, photoArray, function(fileIds, submissionFolderId, indexedWalkaroundIds) {
-          responseRecord.gdFileIds = fileIds;
-          uploadItemPhotosToGoogleDrive(responseRecord, itemPhotoList, submissionFolderId, function(indexedItemIds) {
-            applyDriveIdsToManifest(responseRecord, walkaroundPhotos, itemPhotoList, indexedWalkaroundIds, indexedItemIds);
-            _driveArchivePass = false;
+    function failSignedSubmit(message) {
+      setSubmitLocked(false);
+      var sp = document.getElementById('upSpinner');
+      if (sp) sp.style.display = 'none';
+      upSetText('upTitle', 'Could not save');
+      showScreen('review');
+      alert(message);
+    }
+
+    uploadSignoffCardToMediaFile(responseRecord, function(signoffOk) {
+      if (!signoffOk) {
+        failSignedSubmit('Sign-off upload failed before checklist save. Please review and try again.');
+        return;
+      }
+
+      if (useDemoMediaStorage()) {
+        uploadPhotosToMediaFileMode(responseRecord, walkaroundPhotos, itemPhotoList, function() {
+          if (useDriveArchive() && GD_CONFIG && GD_CONFIG.refreshToken) {
+            _driveArchivePass = true;
+            upRender('Finalising secure photo storage…');
+            uploadPhotosToGoogleDrive(responseRecord, photoArray, function(fileIds, submissionFolderId, indexedWalkaroundIds) {
+              responseRecord.gdFileIds = fileIds;
+              uploadItemPhotosToGoogleDrive(responseRecord, itemPhotoList, submissionFolderId, function(indexedItemIds) {
+                applyDriveIdsToManifest(responseRecord, walkaroundPhotos, itemPhotoList, indexedWalkaroundIds, indexedItemIds);
+                uploadSignoffCardToDrive(responseRecord, submissionFolderId, function() {
+                  _driveArchivePass = false;
+                  responseRecord.items.forEach(function(item) { item.itemPhotos = []; });
+                  saveResponseRecord(responseRecord);
+                });
+              });
+            });
+          } else {
+            if (useDriveArchive() && responseRecord.capturedPhotoCount > 0) {
+              _archiveErrors.push('Google Drive is not connected; photos remain safely stored in MyGeotab.');
+              queueDriveArchive(responseRecord, walkaroundPhotos, itemPhotoList);
+            }
+            if (responseRecord.signoff && useDriveArchive()) responseRecord.signoff.archiveStatus = 'pending';
             responseRecord.items.forEach(function(item) { item.itemPhotos = []; });
             saveResponseRecord(responseRecord);
+          }
+        });
+        return;
+      }
+
+      if (GD_CONFIG && GD_CONFIG.refreshToken) {
+        // Upload vehicle photos to Google Drive
+        uploadPhotosToGoogleDrive(responseRecord, photoArray, function(fileIds, submissionFolderId) {
+          responseRecord.gdFileIds = fileIds;
+          // Upload item photos to Google Drive, reusing the folder just created
+          uploadItemPhotosToGoogleDrive(responseRecord, itemPhotoList, submissionFolderId, function() {
+            uploadSignoffCardToDrive(responseRecord, submissionFolderId, function() {
+              // Clear base64 from record before saving to stay within AddInData limits
+              responseRecord.items.forEach(function(item) { item.itemPhotos = []; });
+              saveResponseRecord(responseRecord);
+            });
           });
         });
       } else {
-        if (useDriveArchive() && responseRecord.capturedPhotoCount > 0) {
-          _archiveErrors.push('Google Drive is not connected; photos remain safely stored in MyGeotab.');
-          queueDriveArchive(responseRecord, walkaroundPhotos, itemPhotoList);
-        }
-        responseRecord.items.forEach(function(item) { item.itemPhotos = []; });
-        saveResponseRecord(responseRecord);
+        // Drive is not usable right now. Walkaround photos still go to MediaFile so
+        // they are never at risk, but they are queued too so the Drive folder ends
+        // up complete. Checklist photos have no MediaFile path at all — the queue
+        // is the only thing standing between them and being discarded at save.
+        photoArray.forEach(function(p, i) {
+          queueLater('walkaround', p, 'photo_' + (i + 1) + '.jpg', null, i,
+            'walkaround:' + ((walkaroundPhotos[i] && walkaroundPhotos[i].slot) || PHOTO_SLOTS[i] || i));
+        });
+        itemPhotoList.forEach(function(entry) {
+          queueLater('item', entry.photo, 'item_' + entry.itemId + '_photo' + (entry.idx + 1) + '.jpg',
+            entry.itemId, entry.idx, 'item:' + entry.itemId + ':' + entry.idx);
+        });
+        if (responseRecord.signoff && useDriveArchive()) responseRecord.signoff.archiveStatus = 'pending';
+        uploadPhotosSequentially(photoArray, responseRecord, 0, function() {
+          saveResponseRecord(responseRecord);
+        });
       }
     });
-    return;
-  }
-
-  if (GD_CONFIG && GD_CONFIG.refreshToken) {
-    // Upload vehicle photos to Google Drive
-    uploadPhotosToGoogleDrive(responseRecord, photoArray, function(fileIds, submissionFolderId) {
-      responseRecord.gdFileIds = fileIds;
-      // Upload item photos to Google Drive, reusing the folder just created
-      uploadItemPhotosToGoogleDrive(responseRecord, itemPhotoList, submissionFolderId, function() {
-        // Clear base64 from record before saving to stay within AddInData limits
-        responseRecord.items.forEach(function(item) { item.itemPhotos = []; });
-        saveResponseRecord(responseRecord);
-      });
-    });
-  } else {
-    // Drive is not usable right now. Walkaround photos still go to MediaFile so
-    // they are never at risk, but they are queued too so the Drive folder ends
-    // up complete. Checklist photos have no MediaFile path at all — the queue
-    // is the only thing standing between them and being discarded at save.
-    photoArray.forEach(function(p, i) {
-      queueLater('walkaround', p, 'photo_' + (i + 1) + '.jpg', null, i,
-        'walkaround:' + ((walkaroundPhotos[i] && walkaroundPhotos[i].slot) || PHOTO_SLOTS[i] || i));
-    });
-    itemPhotoList.forEach(function(entry) {
-      queueLater('item', entry.photo, 'item_' + entry.itemId + '_photo' + (entry.idx + 1) + '.jpg',
-        entry.itemId, entry.idx, 'item:' + entry.itemId + ':' + entry.idx);
-    });
-    uploadPhotosSequentially(photoArray, responseRecord, 0, function() {
-      saveResponseRecord(responseRecord);
-    });
-  }
   }
 }
 
@@ -2565,6 +3705,82 @@ function uploadManifestEntryToMedia(session, rec, entry, onDone) {
   });
 }
 
+function uploadSignoffCardToMediaFile(rec, onDone) {
+  if (!rec.signoff || !SIGNOFF.cardDataUrl) {
+    onDone(true);
+    return;
+  }
+
+  upRender('Uploading sign-off card to MyGeotab…');
+  getUploadSession(function(session) {
+    var entry = {
+      key: 'signoff:card',
+      kind: 'signoff',
+      mediaFileId: rec.signoff.cardMediaFileId || '',
+      state: 'pending',
+      status: 'Unknown',
+      error: '',
+      dataUrl: SIGNOFF.cardDataUrl
+    };
+    uploadManifestEntryToMedia(session, rec, entry, function() {
+      if (!entry.mediaFileId || (entry.state !== 'ready' && entry.state !== 'pending')) {
+        _photoErrors.push('Sign-off card upload failed: ' + (entry.error || entry.status || 'unknown'));
+        onDone(false);
+        return;
+      }
+      rec.signoff.cardMediaFileId = entry.mediaFileId;
+      rec.signoff.archiveStatus = 'pending';
+      SIGNOFF.cardMediaFileId = entry.mediaFileId;
+      SIGNOFF.archiveStatus = 'pending';
+      onDone(true);
+    });
+  }, function(err) {
+    _photoErrors.push('Sign-off card upload unavailable: ' + err);
+    onDone(false);
+  });
+}
+
+function uploadSignoffCardToDrive(rec, submissionFolderId, onDone) {
+  if (!rec.signoff || !SIGNOFF.cardDataUrl) { onDone(); return; }
+  if (!useDriveArchive() || !GD_CONFIG || !GD_CONFIG.refreshToken) { onDone(); return; }
+
+  function doUpload(accessToken, folderId) {
+    var fileName = ('checkin_' + rec.id + '_operational_signoff.jpg').toLowerCase();
+    gdUploadPhoto(accessToken, SIGNOFF.cardDataUrl, fileName, folderId, function(fileId) {
+      rec.signoff.cardDriveFileId = fileId;
+      rec.signoff.archiveStatus = 'complete';
+      SIGNOFF.cardDriveFileId = fileId;
+      SIGNOFF.archiveStatus = 'complete';
+      onDone();
+    }, function(err) {
+      gdFail('Sign-off card archive', err);
+      rec.signoff.archiveStatus = 'pending';
+      onDone();
+    }, rec.id + ':signoff');
+  }
+
+  gdRefreshToken(function(accessToken) {
+    if (submissionFolderId) {
+      doUpload(accessToken, submissionFolderId);
+      return;
+    }
+    var dateStr = rec.submittedAt.slice(0, 10);
+    var vehicleName = gdFolderName(rec.deviceName);
+    gdGetOrCreateFolder(accessToken, 'Vehicle Check-In', null, function(rootId) {
+      gdGetOrCreateFolder(accessToken, dateStr, rootId, function(dateId) {
+        gdGetOrCreateFolder(accessToken, vehicleName, dateId, function(vehicleId) {
+          gdGetOrCreateFolder(accessToken, rec.id, vehicleId, function(subId) {
+            doUpload(accessToken, subId);
+          }, function(err) { gdFail('Sign-off submission folder', err); onDone(); });
+        }, function(err) { gdFail('Sign-off vehicle folder', err); onDone(); });
+      }, function(err) { gdFail('Sign-off date folder', err); onDone(); });
+    }, function(err) { gdFail('Sign-off root folder', err); onDone(); });
+  }, function(err) {
+    gdFail('Sign-off token refresh', err);
+    onDone();
+  });
+}
+
 function uploadPhotosToMediaFileMode(rec, walkaroundPhotos, itemPhotoList, onDone) {
   getUploadSession(function(session) {
     var manifestEntries = [];
@@ -2770,6 +3986,354 @@ function uploadPhotosSequentially(photoList, rec, index, onDone) {
   });
 }
 
+function getResponseStorageRows(submissionId, onDone, onError) {
+  apiCall('Get', { typeName: 'AddInData', search: { addInId: ADDIN_ID } }, function(results) {
+    onDone((results || []).filter(function(row) {
+      var details = row.details || {};
+      return (details.type === 'ChecklistResponse' && details.id === submissionId)
+        || (details.type === 'ChecklistResponsePart' && details.submissionId === submissionId);
+    }));
+  }, onError);
+}
+
+function deliverSingleResponse(batch, onDone, onError, attempt, forceAdd) {
+  attempt = attempt || 0;
+  var expected = batch.plan && batch.plan.response;
+  if (!expected || batch.plan.mode !== 'single' || pqDatabaseKey() !== batch.databaseKey) {
+    onError('Submission context is no longer valid');
+    return;
+  }
+
+  function verifyRow(id) {
+    verifySavedResponse(id, expected, function(ok, details, message) {
+      if (ok) { onDone(id, details || expected); return; }
+      if (attempt >= 2) { onError(message); return; }
+      setTimeout(function() {
+        deliverSingleResponse(batch, onDone, onError, attempt + 1);
+      }, 750);
+    });
+  }
+
+  function addRecord() {
+    apiCall('Add', {
+      typeName: 'AddInData',
+      entity: { addInId: ADDIN_ID, details: expected }
+    }, verifyRow, reconcile);
+  }
+
+  function reconcile(lastError) {
+    getResponseStorageRows(expected.id, function(rows) {
+      var saved = rows.find(function(row) {
+        return row.details && row.details.type === 'ChecklistResponse'
+          && !row.details.multipartStatus
+          && row.details.responseHash === expected.responseHash;
+      });
+      if (saved) { verifyRow(saved.id); return; }
+      if (attempt >= 2) {
+        onError(lastError && lastError.message ? lastError.message : String(lastError || 'Submission save failed'));
+        return;
+      }
+      setTimeout(function() {
+        deliverSingleResponse(batch, onDone, onError, attempt + 1, true);
+      }, 750);
+    }, function(err) {
+      if (attempt >= 2) { onError(err); return; }
+      setTimeout(function() {
+        deliverSingleResponse(batch, onDone, onError, attempt + 1);
+      }, 750);
+    });
+  }
+
+  if (forceAdd) {
+    addRecord();
+    return;
+  }
+  if (batch.started) {
+    reconcile('Reconciling an interrupted submission');
+    return;
+  }
+  batch.started = true;
+  batch.updatedAt = Date.now();
+  responseBatchPut(batch, function(saved) {
+    if (!saved) { onError('This device could not update its recoverable send queue'); return; }
+    addRecord();
+  });
+}
+
+function deliverStoredResponse(batch, onDone, onError) {
+  if (!batch || !batch.batchKey) { onError('Submission queue record is missing'); return; }
+  responseBatchAcquire(batch.batchKey, function(acquired, leaseOwner) {
+    if (!acquired) {
+      onError(leaseOwner === _responseWorkerId
+        ? 'This Vehicle Check-In page is already sending this submission'
+        : 'Another Vehicle Check-In page is already sending this submission');
+      return;
+    }
+    batch.leaseOwner = _responseWorkerId;
+    batch.leaseUntil = Date.now() + (30 * 60 * 1000);
+    function failed(err) {
+      responseBatchRelease(batch.batchKey, function() { onError(err); });
+    }
+    if (batch.plan && batch.plan.mode === 'single') {
+      deliverSingleResponse(batch, onDone, failed);
+      return;
+    }
+    deliverResponseBatch(batch, onDone, failed);
+  });
+}
+
+function deliverResponseBatch(batch, onDone, onError, attempt) {
+  attempt = attempt || 0;
+  var plan = batch.plan;
+  if (!plan || plan.mode !== 'multipart' || pqDatabaseKey() !== batch.databaseKey) {
+    onError('Submission batch context is no longer valid');
+    return;
+  }
+
+  function retryOrFail(err) {
+    if (attempt < 2) {
+      setTimeout(function() { deliverResponseBatch(batch, onDone, onError, attempt + 1); }, 750);
+      return;
+    }
+    onError(err && err.message ? err.message : String(err));
+  }
+
+  function verifyCommitted(rootId) {
+    getResponseStorageRows(plan.response.id, function(rows) {
+      var rootRow = rows.find(function(row) {
+        return row.id === rootId && row.details && row.details.responseHash === plan.root.responseHash;
+      });
+      var partDetails = rows.filter(function(row) {
+        return row.details && row.details.type === 'ChecklistResponsePart';
+      }).map(function(row) {
+        var details = JSON.parse(JSON.stringify(row.details));
+        details._addInDataId = row.id;
+        return details;
+      });
+      var assembled = rootRow ? ChecklistResponseStorage.reassemble(rootRow.details, partDetails) : { complete: false };
+      if (!assembled.complete) {
+        retryOrFail(assembled.reason || 'Saved submission parts could not be verified');
+        return;
+      }
+      onDone(rootId, assembled.response);
+    }, retryOrFail);
+  }
+
+  function writeParts(rootId, existingRows) {
+    var existingParts = {};
+    existingRows.forEach(function(row) {
+      var details = row.details || {};
+      if (details.type === 'ChecklistResponsePart'
+          && details.partHash === ChecklistResponseStorage.partHash(details.items)
+          && plan.parts[details.partIndex]
+          && details.partHash === plan.parts[details.partIndex].partHash) {
+        existingParts[details.partIndex] = row.id;
+      }
+    });
+
+    var partIds = [];
+    var index = 0;
+    function nextPart() {
+      if (index >= plan.parts.length) {
+        var completeRoot = JSON.parse(JSON.stringify(plan.completeRoot));
+        completeRoot.partAddInDataIds = partIds;
+        if (ChecklistResponseStorage.serializedLength(completeRoot) > ChecklistResponseStorage.DEFAULT_SAFE_LENGTH) {
+          onError('Completed checklist summary exceeds the safe storage limit');
+          return;
+        }
+        apiCall('Set', {
+          typeName: 'AddInData',
+          entity: { id: rootId, addInId: ADDIN_ID, details: completeRoot }
+        }, function() {
+          verifyCommitted(rootId);
+        }, retryOrFail);
+        return;
+      }
+
+      var currentIndex = index++;
+      if (existingParts[currentIndex]) {
+        partIds[currentIndex] = existingParts[currentIndex];
+        nextPart();
+        return;
+      }
+      upRender('Saving checklist data part ' + (currentIndex + 1) + ' of ' + plan.parts.length + '…');
+      apiCall('Add', {
+        typeName: 'AddInData',
+        entity: { addInId: ADDIN_ID, details: plan.parts[currentIndex] }
+      }, function(partId) {
+        partIds[currentIndex] = partId;
+        nextPart();
+      }, retryOrFail);
+    }
+    nextPart();
+  }
+
+  getResponseStorageRows(plan.response.id, function(rows) {
+    var rootRow = rows.find(function(row) {
+      return row.details && row.details.type === 'ChecklistResponse'
+        && row.details.responseHash === plan.root.responseHash;
+    });
+    if (rootRow && rootRow.details.multipartStatus === 'complete') {
+      verifyCommitted(rootRow.id);
+      return;
+    }
+    if (rootRow) {
+      writeParts(rootRow.id, rows);
+      return;
+    }
+    upRender('Preparing multipart checklist storage…');
+    apiCall('Add', {
+      typeName: 'AddInData',
+      entity: { addInId: ADDIN_ID, details: plan.root }
+    }, function(rootId) {
+      writeParts(rootId, rows);
+    }, retryOrFail);
+  }, retryOrFail);
+}
+
+function ensureResponseSideEffects(rec, addInDataId, queuedPhotos, onDone) {
+  var failedItems = (rec.items || []).filter(function(item) {
+    return item.value === 'fail' || item.value === 'no';
+  });
+  var issueIdsByItem = {};
+
+  function flushPhotoQueue() {
+    var pendingPhotos = (queuedPhotos || []).slice();
+    if (!pendingPhotos.length) { onDone(true); return; }
+    _toQueue = pendingPhotos;
+    pqFlushToStore(rec, addInDataId, issueIdsByItem, function(stored) {
+      onDone(stored === pendingPhotos.length);
+    });
+  }
+
+  if (!failedItems.length) { flushPhotoQueue(); return; }
+  apiCall('Get', { typeName: 'AddInData', search: { addInId: ADDIN_ID } }, function(results) {
+    (results || []).forEach(function(row) {
+      var details = row.details || {};
+      if (details.type === 'IssueStatus' && details.submissionId === rec.id && details.itemId) {
+        issueIdsByItem[details.itemId] = row.id;
+      }
+    });
+
+    var remaining = failedItems.length;
+    var allSaved = true;
+    function settled() {
+      remaining--;
+      if (remaining > 0) return;
+      if (!allSaved) { onDone(false); return; }
+      flushPhotoQueue();
+    }
+    failedItems.forEach(function(item) {
+      if (issueIdsByItem[item.id]) { settled(); return; }
+      var manifestEntries = (rec.photoManifest || []).filter(function(entry) {
+        return entry.kind === 'item' && entry.itemId === item.id;
+      });
+      var hasManifest = rec.photoStorageVersion === 2 && (rec.photoManifest || []).length > 0;
+      var issueRecord = {
+        type:          'IssueStatus',
+        id:            'issue-' + rec.id + '-' + item.id,
+        submissionId:  rec.id,
+        itemId:        item.id,
+        itemLabel:     String(item.label || '').slice(0, 500),
+        itemValue:     item.value,
+        itemNote:      String(item.note || '').slice(0, RESPONSE_TEXT_MAX_LENGTH),
+        itemSides:     item.sides || [],
+        gdItemPhotoIds: hasManifest ? [] : (item.gdItemPhotoIds || manifestEntries.map(function(entry) { return entry.gdFileId; }).filter(Boolean)),
+        itemMediaFileIds: hasManifest ? [] : (item.mediaFileIds || manifestEntries.map(function(entry) { return entry.mediaFileId; }).filter(Boolean)),
+        vehicleName:   String(rec.deviceName || '').slice(0, 500),
+        driverName:    String(rec.driverName || '').slice(0, 500),
+        submittedAt:   rec.submittedAt,
+        templateName:  String(rec.templateName || '').slice(0, 500),
+        status:        'flagged',
+        comments:      []
+      };
+      var issueLength = JSON.stringify(issueRecord).length;
+      if (issueLength > ChecklistResponseStorage.DEFAULT_SAFE_LENGTH && issueRecord.itemNote) {
+        issueRecord.itemNote = issueRecord.itemNote.slice(0,
+          Math.max(0, issueRecord.itemNote.length - (issueLength - ChecklistResponseStorage.DEFAULT_SAFE_LENGTH) - 100));
+      }
+      if (JSON.stringify(issueRecord).length > ChecklistResponseStorage.DEFAULT_SAFE_LENGTH) {
+        allSaved = false;
+        settled();
+        return;
+      }
+      apiCall('Add', { typeName: 'AddInData', entity: { addInId: ADDIN_ID, details: issueRecord } }, function(issueId) {
+        issueIdsByItem[item.id] = issueId;
+        settled();
+      }, function() {
+        allSaved = false;
+        settled();
+      });
+    });
+  }, function() { onDone(false); });
+}
+
+function persistResponseRecord(rec, onDone, onError) {
+  var plan;
+  try {
+    var projectedPlan = ChecklistResponseStorage.buildPlan(responseStorageSizingProjection(rec));
+    plan = ChecklistResponseStorage.buildPlan(rec, null, projectedPlan.mode === 'multipart');
+  } catch (err) {
+    onError(err);
+    return;
+  }
+
+  var batchKey = responseBatchKey(plan.response.id);
+  var batch = {
+    batchKey: batchKey,
+    databaseKey: pqDatabaseKey(),
+    submissionId: plan.response.id,
+    updatedAt: Date.now(),
+    started: false,
+    plan: plan,
+    draftKey: currentDraftKey(),
+    queuedPhotos: _toQueue.slice()
+  };
+  _activeResponseBatch = batch;
+  responseBatchPut(batch, function(saved) {
+    if (!saved) {
+      _activeResponseBatch = null;
+      onError('This device could not create a recoverable checklist send queue');
+      return;
+    }
+    deliverStoredResponse(batch, function(id, verifiedDetails) { onDone(id, verifiedDetails, batch); }, onError);
+  });
+}
+
+function verifySavedResponse(addInDataId, expected, onDone) {
+  apiCall('Get', { typeName: 'AddInData', search: { id: addInDataId } }, function(results) {
+    var row = results && results[0];
+    var details = row && row.details;
+    if (!details) {
+      onDone(false, null, 'Could not verify the saved checklist record.');
+      return;
+    }
+    if (details.id !== expected.id) {
+      onDone(false, null, 'Saved record id does not match this submission.');
+      return;
+    }
+    if (expected.responseHash && details.responseHash !== expected.responseHash) {
+      onDone(false, null, 'Saved record hash does not match this submission.');
+      return;
+    }
+    if (expected.signoff) {
+      var savedSignoff = details.signoff || {};
+      if (!savedSignoff.cardMediaFileId || savedSignoff.cardMediaFileId !== expected.signoff.cardMediaFileId) {
+        onDone(false, null, 'Sign-off media reference was not confirmed after save.');
+        return;
+      }
+      if ((savedSignoff.signeeName || '') !== (expected.signoff.signeeName || '')) {
+        onDone(false, null, 'Signee name mismatch after save confirmation.');
+        return;
+      }
+    }
+    details._addInDataId = row.id;
+    onDone(true, details, '');
+  }, function(err) {
+    onDone(false, null, (err && err.message) ? err.message : String(err));
+  });
+}
+
 function saveResponseRecord(rec) {
   // Every upload path funnels through here, including the ones that gave up at a
   // folder step, so this is the one safe place to flip the counters to their
@@ -2818,29 +4382,13 @@ function saveResponseRecord(rec) {
     else rec.photoUploadStatus = 'partial';
   }
 
-  if (rec.photoStorageVersion === 2 && JSON.stringify(rec).length > 9500) {
-    // photoManifest is canonical for v2. Drop duplicate legacy Drive arrays and
-    // bound diagnostic text before risking AddInData's 10,000-character limit.
-    rec.gdFileIds = [];
-    (rec.items || []).forEach(function(item) { item.gdItemPhotoIds = []; });
-    (rec.photoManifest || []).forEach(function(entry) {
-      if (entry.error && entry.error.length > 160) entry.error = entry.error.slice(0, 160);
-    });
-  }
-  if (JSON.stringify(rec).length > 9500) {
-    setSubmitLocked(false);
-    var sizeSpinner = document.getElementById('upSpinner');
-    if (sizeSpinner) sizeSpinner.style.display = 'none';
-    upSetText('upTitle', 'Could not save');
-    showScreen(CHECKLIST && CHECKLIST.requirePhotos ? 'photos' : 'checklist');
-    alert('The checklist metadata is too large to save safely. Shorten long notes and try again.');
-    return;
-  }
+  (rec.photoManifest || []).forEach(function(entry) {
+    if (entry.error && entry.error.length > 160) entry.error = entry.error.slice(0, 160);
+  });
 
-  apiCall('Add', {
-    typeName: 'AddInData',
-    entity: { addInId: ADDIN_ID, details: rec }
-  }, function(id) {
+  persistResponseRecord(rec, function(id, verifiedDetails, responseBatch) {
+    clearCurrentDraft();
+
     var walkaroundSaved = 0;
     var walkaroundTotal = rec.photoCount || 0;
     var checklistSaved  = 0;
@@ -2898,6 +4446,14 @@ function saveResponseRecord(rec) {
         photoHtml += photoRow('Google Drive archive', rec.driveArchivedPhotoCount || 0, capturedTotal);
       }
     }
+    if (rec.signoff) {
+      photoHtml += '<div class="flex items-start justify-between gap-2">'
+        + '<span class="text-sm text-slate-500">Operational sign-off</span>'
+        + '<span class="font-semibold text-slate-700 text-sm text-right">'
+        + String(rec.signoff.signeeName || 'Signee').replace(/</g, '&lt;') + '<br><span style="font-weight:500;color:#64748b">'
+        + formatSignedAt(rec.signoff.signedAtUtc, rec.signoff.timezoneOffsetMinutes).replace(/</g, '&lt;') + '</span></span>'
+        + '</div>';
+    }
     // Show what went wrong rather than reporting a clean success over missing
     // photos. _photoErrors was collected but never rendered before this.
     if (_photoErrors.length) {
@@ -2922,52 +4478,27 @@ function saveResponseRecord(rec) {
     TODAY_SUBMISSIONS[rec.deviceId] = true; // badge shows if driver goes back
     showScreen('success');
 
-    // Auto-create IssueStatus records for each failed item. Their AddInData ids
-    // are kept so a later photo retry can patch them the same way it patches
-    // the response record — an issue with no photo is the one people open.
-    var issueIdsByItem = {};
-    var failedItems = rec.items.filter(function(i) { return i.value === 'fail' || i.value === 'no'; });
-    var issuesLeft  = failedItems.length;
-    function issuesDone() {
-      if (issuesLeft > 0) return;
-      if (useDemoMediaStorage() && !useDriveArchive()) {
-        refreshPendingBanner();
+    var queuedPhotos = responseBatch ? (responseBatch.queuedPhotos || []) : _toQueue.slice();
+    ensureResponseSideEffects(rec, id, queuedPhotos, function(sideEffectsReady) {
+      if (!sideEffectsReady) {
+        console.warn('[Response storage] Submission saved; finalisation will retry on the next load');
+        if (responseBatch) responseBatchRelease(responseBatch.batchKey);
         return;
       }
-      // Only now are all the ids known, so the queue entries can point at both
-      // the response record and the issue record they belong to.
-      pqFlushToStore(rec, id, issueIdsByItem, function(stored) {
-        if (stored) console.log('[Queue] ' + stored + ' photo(s) held for retry');
+      function finished() {
         refreshPendingBanner();
-        // A one-off upload failure often clears on the next try, so attempt the
-        // queue immediately. It exits at once if Drive is still unusable.
-        if (stored) flushPendingPhotos(function(msg) { console.log('[Queue] post-submit: ' + msg); });
-      });
-    }
-    function issueSettled() { issuesLeft--; issuesDone(); }
-    issuesDone();
-    failedItems.forEach(function(item) {
-      var issueRecord = {
-        type:          'IssueStatus',
-        id:            'issue-' + rec.id + '-' + item.id,
-        submissionId:  rec.id,
-        itemId:        item.id,
-        itemLabel:     item.label,
-        itemValue:     item.value,
-        itemNote:      item.note || '',
-        itemSides:     item.sides || [],
-        gdItemPhotoIds: item.gdItemPhotoIds || [],
-        itemMediaFileIds: item.mediaFileIds || [],
-        vehicleName:   rec.deviceName,
-        driverName:    rec.driverName,
-        submittedAt:   rec.submittedAt,
-        templateName:  rec.templateName,
-        status:        'flagged',
-        comments:      []
-      };
-      apiCall('Add', { typeName: 'AddInData', entity: { addInId: ADDIN_ID, details: issueRecord } },
-        function(issueId) { issueIdsByItem[item.id] = issueId; issueSettled(); },
-        function() { issueSettled(); }); // silent — don't block the success screen
+        if (queuedPhotos.length) {
+          flushPendingPhotos(function(msg) { console.log('[Queue] post-submit: ' + msg); });
+        }
+      }
+      if (responseBatch) {
+        responseBatchDelete(responseBatch.batchKey, function() {
+          if (_activeResponseBatch && _activeResponseBatch.batchKey === responseBatch.batchKey) _activeResponseBatch = null;
+          finished();
+        });
+      } else {
+        finished();
+      }
     });
   }, function(err) {
     // Hand the driver back the form they came from rather than stranding them on
@@ -2978,10 +4509,45 @@ function saveResponseRecord(rec) {
     var sp = document.getElementById('upSpinner');
     if (sp) sp.style.display = 'none';
     upSetText('upTitle', 'Could not save');
-    showScreen(CHECKLIST && CHECKLIST.requirePhotos ? 'photos' : 'checklist');
+    showScreen(CHECKLIST && CHECKLIST.requireSignoff ? 'review' : (CHECKLIST && CHECKLIST.requirePhotos ? 'photos' : 'checklist'));
     var msg = (err && err.message) ? err.message : JSON.stringify(err);
-    alert('Save failed: ' + msg + '\n\nPlease try again or check your connection.');
+    if (_activeResponseBatch) {
+      alert('The connection was interrupted while saving. This submission is queued safely on this device and will resume automatically when the connection returns.\n\n' + msg);
+    } else {
+      alert('Save failed: ' + msg + '\n\nPlease try again or check your connection.');
+    }
   });
+}
+
+function resetAfterSuccess() {
+  clearCurrentDraft();
+  responses = {};
+  photos = {};
+  _activeSubmissionId = '';
+  SIGNOFF = {
+    signeeName: '',
+    signedAtUtc: '',
+    localDate: '',
+    timezoneOffsetMinutes: null,
+    signatureDataUrl: '',
+    hasStroke: false,
+    cardDataUrl: '',
+    cardMediaFileId: '',
+    cardDriveFileId: '',
+    archiveStatus: 'pending',
+    confirmed: false,
+    acknowledgementVersion: 1,
+    acknowledgementText: 'I acknowledge that I reviewed the checklist information and photographs shown.'
+  };
+  PHOTO_SLOTS.forEach(function(slot) {
+    var slotEl = document.getElementById('slot-' + slot);
+    var imgEl = document.getElementById('slot-' + slot + '-img');
+    if (imgEl) { imgEl.innerHTML = ''; imgEl.style.display = 'none'; }
+    if (slotEl) { slotEl.style.borderColor = '#93c5fd'; slotEl.style.borderStyle = 'dashed'; }
+  });
+  setSubmitLocked(false);
+  showScreen('select');
+  renderVehicleList();
 }
 
 function dataUrlToBlob(dataUrl) {
@@ -3043,11 +4609,13 @@ function renderDirectionalSlot(slot, dataUrl) {
 function removeDirectionalPhoto(event, slot) {
   event.stopPropagation();
   photos[slot] = null;
+  invalidateSignoff();
   var slotEl = document.getElementById('slot-' + slot);
   var imgEl  = document.getElementById('slot-' + slot + '-img');
   if (imgEl) { imgEl.innerHTML = ''; imgEl.style.display = 'none'; }
   if (slotEl) { slotEl.style.borderColor = '#93c5fd'; slotEl.style.borderStyle = 'dashed'; }
   updateSubmitFromSlots();
+  scheduleDraftSave();
 }
 
 function updateSubmitFromSlots() {
@@ -3056,12 +4624,16 @@ function updateSubmitFromSlots() {
   var note = document.getElementById('photoRequiredNote');
   if (!CHECKLIST.requirePhotos) {
     if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
-    if (note) note.textContent = allFilled ? 'All photos captured — ready to submit' : 'Photos optional';
+    if (note) note.textContent = allFilled
+      ? (CHECKLIST.requireSignoff ? 'All photos captured — continue to review' : 'All photos captured — ready to submit')
+      : 'Photos optional';
     return;
   }
   if (btn) { btn.disabled = !allFilled; btn.style.opacity = allFilled ? '1' : '0.4'; }
   var missing = PHOTO_SLOTS.filter(function(s) { return !photos[s]; });
-  if (note) note.textContent = allFilled ? 'All photos captured — ready to submit' : missing.length + ' photo' + (missing.length > 1 ? 's' : '') + ' still needed';
+  if (note) note.textContent = allFilled
+    ? (CHECKLIST.requireSignoff ? 'All photos captured — continue to review' : 'All photos captured — ready to submit')
+    : missing.length + ' photo' + (missing.length > 1 ? 's' : '') + ' still needed';
 }
 
 function renderItemPhotoGrid(itemId) {
@@ -3079,8 +4651,10 @@ function renderItemPhotoGrid(itemId) {
 function removeItemPhoto(itemId, index) {
   if (responses[itemId] && responses[itemId].itemPhotos) {
     responses[itemId].itemPhotos.splice(index, 1);
+    invalidateSignoff();
     renderItemPhotoGrid(itemId);
     refreshPhotoRequiredState(itemId);
+    scheduleDraftSave();
   }
 }
 
@@ -3173,14 +4747,18 @@ function capturePhoto() {
       if (!responses[itemId]) responses[itemId] = {};
       if (!responses[itemId].itemPhotos) responses[itemId].itemPhotos = [];
       responses[itemId].itemPhotos.push(compressed);
+      invalidateSignoff();
       renderItemPhotoGrid(itemId);
       // Refresh button label, card state and progress for picture_required and photoRequired items
       refreshPhotoRequiredState(itemId);
+      scheduleDraftSave();
     } else if (slot) {
       // Directional vehicle photo
       photos[slot] = compressed;
+      invalidateSignoff();
       renderDirectionalSlot(slot, compressed);
       updateSubmitFromSlots();
+      scheduleDraftSave();
     }
   });
 }
@@ -3188,7 +4766,18 @@ function capturePhoto() {
 // ── Utility ───────────────────────────────────────────────────────────────────
 
 var _currentScreen = 'select';
-var _prevScreenMap = { 'picker': 'select', 'checklist': 'select', 'photos': 'checklist', 'success': 'select' };
+
+function previousScreenFor(name) {
+  if (name === 'picker') return 'select';
+  if (name === 'checklist') return 'select';
+  if (name === 'photos') return hasChecklistQuestions() ? 'checklist' : 'select';
+  if (name === 'review') {
+    if (CHECKLIST.requirePhotos) return 'photos';
+    return hasChecklistQuestions() ? 'checklist' : 'select';
+  }
+  if (name === 'success') return 'select';
+  return null;
+}
 
 function showScreen(name) {
   document.querySelectorAll('.screen').forEach(function(s) { s.style.display = 'none'; });
@@ -3206,14 +4795,28 @@ function showScreen(name) {
   if (btn) { btn.style.display = (name !== 'select' && name !== 'success' && name !== 'uploading') ? 'flex' : 'none'; }
 }
 
+function reviewPhotoModalIsOpen() {
+  var modal = document.getElementById('reviewPhotoModal');
+  return !!modal && !modal.classList.contains('hidden');
+}
+
 function iosGoBack() {
-  var prev = _prevScreenMap[_currentScreen];
+  if (reviewPhotoModalIsOpen()) {
+    closeReviewPhotoModal();
+    return;
+  }
+  var prev = previousScreenFor(_currentScreen);
   if (prev) { showScreen(prev); }
 }
 
 // Android hardware back / browser back
 window.addEventListener('popstate', function() {
-  var prev = _prevScreenMap[_currentScreen];
+  if (reviewPhotoModalIsOpen()) {
+    closeReviewPhotoModal();
+    history.pushState({ screen: _currentScreen }, '', '');
+    return;
+  }
+  var prev = previousScreenFor(_currentScreen);
   if (prev) {
     showScreen(prev);
   } else {
